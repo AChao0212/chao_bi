@@ -132,7 +132,7 @@ def apply_leverage_override(symbol: str, suggested: int | None) -> int:
 
 # 在腳本頂層初始化幣安客戶端
 if not BINANCE_API_KEY or not BINANCE_API_SECRET:
-    print("❌ [Binance 錯誤]: 找不到 'binance.txt' 或金鑰不完整。")
+    print("[Binance] [error]: 找不到 'binance.txt' 或金鑰不完整。")
 else:
     try:
         binance_client = UMFutures(
@@ -144,14 +144,14 @@ else:
         try:
             position_mode = binance_client.get_position_mode()
             if position_mode.get('dualSidePosition') == False:
-                print("⚠️ [Binance 警告]：偵測到帳戶為「單向持倉」，正在嘗試切換至「雙向持倉」...")
+                print("[Binance] [warning]: 偵測到帳戶為「單向持倉」，正在嘗試切換至「雙向持倉」...")
                 binance_client.change_position_mode(dualSidePosition=True)
-                print("✅ [Binance 資訊]：已成功切換至「雙向持倉 (Hedge Mode)」。")
+                print("[Binance 資訊]：已成功切換至「雙向持倉 (Hedge Mode)」。")
             else:
-                print("✅ [Binance 資訊]：帳戶已處於「雙向持倉 (Hedge Mode)」。")
+                print("[Binance 資訊]：帳戶已處於「雙向持倉 (Hedge Mode)」。")
         except ClientError as e:
             if e.error_code == -4059: # "No need to change position side."
-                print("✅ [Binance 資訊]：帳戶已處於「雙向持倉 (Hedge Mode)」。")
+                print("[Binance 資訊]：帳戶已處於「雙向持倉 (Hedge Mode)」。")
             else:
                 raise 
         
@@ -159,17 +159,17 @@ else:
         total_available_margin = float(account_info['availableBalance'])
         
         if total_available_margin <= 0:
-             print(f"❌ [Binance 錯誤]: 總可用保證金 (availableBalance) 為 0。")
+             print(f"[Binance] [error]: 總可用保證金 (availableBalance) 為 0。")
              binance_client = None
         else:
-            print(f"✅✅✅ 警告：幣安 *真實環境* 連接成功！✅✅✅")
+            print(f"[Binance] [info]: 幣安 *真實環境* 連接成功！")
             print(f"   多幣種保證金 總可用餘額 (availableBalance): {total_available_margin} USDT")
 
     except ClientError as e:
-        print(f"❌ [Binance 錯誤]: API Key 或 Secret 錯誤。{e}")
+        print(f"[Binance] [error]: API Key 或 Secret 錯誤。{e}")
         binance_client = None
     except Exception as e:
-        print(f"❌ [Binance 錯誤]: 連接失敗: {e}")
+        print(f"[Binance] [error]: 連接失敗: {e}")
         binance_client = None
 
 
@@ -186,10 +186,10 @@ def get_symbol_info(symbol):
             if item['symbol'] == symbol:
                 symbol_info_cache[symbol] = item
                 return item
-        print(f"❌ [Binance 資訊] 找不到 {symbol} 的交易對資訊")
+        print(f"[Binance] [error]: 找不到 {symbol} 的交易對資訊")
         return None
     except ClientError as e:
-        print(f"❌ [Binance 錯誤]: 獲取 Exchange Info 失敗: {e}")
+        print(f"[Binance] [error]: 獲取 Exchange Info 失敗: {e}")
         return None
 
 # --- 檢查 symbol 是否有效 ---
@@ -209,7 +209,7 @@ def get_binance_market_price(symbol):
         ticker = binance_client.ticker_price(symbol)
         return ticker['price']
     except ClientError as e:
-        print(f"❌ [Binance 錯誤]: 獲取 {symbol} 市價失敗: {e}")
+        print(f"[Binance] [error]: 獲取 {symbol} 市價失敗: {e}")
         return None
 
 def get_binance_klines_for_llm(symbol, interval='5m', limit=50):
@@ -220,7 +220,7 @@ def get_binance_klines_for_llm(symbol, interval='5m', limit=50):
     klines_string = "Timestamp, Open, High, Low, Close, Volume\n"
     
     try:
-        print(f"   [Binance 資訊] 正在獲取 {symbol} 最近 {limit} 根 {interval} K線...")
+        print(f"[Binance] [info]: 正在獲取 {symbol} 最近 {limit} 根 {interval} K線...")
         klines = binance_client.klines(
             symbol=symbol,
             interval=interval_map.get(interval, '5m'), 
@@ -231,7 +231,7 @@ def get_binance_klines_for_llm(symbol, interval='5m', limit=50):
             klines_string += f"{timestamp}, {k[1]}, {k[2]}, {k[3]}, {k[4]}, {k[5]}\n"
         return klines_string
     except ClientError as e:
-        print(f"❌ [Binance 錯誤]: 獲取 {symbol} K 線失敗: {e}")
+        print(f"[Binance] [error]: 獲取 {symbol} K 線失敗: {e}")
         return "K-line data not available."
 
 def get_binance_klines_raw(symbol, interval='5m', limit=200):
@@ -250,7 +250,7 @@ def get_binance_klines_raw(symbol, interval='5m', limit=200):
             })
         return out
     except ClientError as e:
-        print(f"❌ [Binance 錯誤]: 取得 {symbol} 原始 K 線失敗: {e}")
+        print(f"[Binance] [error]: 取得 {symbol} 原始 K 線失敗: {e}")
         return []
 
 def compute_atr_from_klines(klines, period=14):
@@ -504,14 +504,14 @@ def set_binance_leverage(symbol, leverage):
 
     def _try_set(lv: int):
         try:
-            print(f"   [Binance 動作] 正在設定 {symbol} 的槓桿為 {lv}x...")
+            print(f"[Binance] 正在設定 {symbol} 的槓桿為 {lv}x...")
             binance_client.change_leverage(symbol=symbol, leverage=int(lv))
-            print(f"   [Binance 資訊] {symbol} 槓桿已設定為 {lv}x")
+            print(f"[Binance] {symbol} 槓桿已設定為 {lv}x")
             return lv
         except ClientError as e_inner:
             # 已是該值或不須更改
             if getattr(e_inner, "error_code", None) == -4048:
-                print(f"   [Binance 資訊] 槓桿已是 {lv}x 或無需更改。")
+                print(f"[Binance] 槓桿已是 {lv}x 或無需更改。")
                 return lv
             # 其他錯誤讓上層處理
             raise e_inner
@@ -1039,16 +1039,16 @@ def reconcile_on_start(event_loop=None, timeout_seconds=AUTO_CANCEL_SECONDS):
     1) 任何非 closePosition 的開倉單（LIMIT 或仍 open 的 MARKET），若下單超過 timeout_seconds 未成交 → 撤單
     2) 任何 closePosition 的 SL/TP 關倉單，若對應倉位不存在（已平倉）→ 撤單
     """
-    print("🔧 [Reconcile] 啟動自動清理程序 …")
+    print("[Reconcile] 啟動自動清理程序 …")
     summary = {"stale_entries": [], "orphan_exits": []}
     try:
         open_orders = _get_all_open_orders()  # 匯總所有 symbol 的 open 訂單
         try:
-            print(f"🔍 Reconcile 掃描完成，open orders 彙整筆數：{len(open_orders)}")
+            print(f"[Reconcile] 掃描完成，open orders 彙整筆數：{len(open_orders)}")
         except Exception:
             pass
     except Exception as e:
-        print(f"❌ 讀取開放訂單未知錯誤：{e}")
+        print(f"[error] 讀取開放訂單未知錯誤：{e}")
         return summary
 
     now_ms = int(time.time() * 1000)
@@ -1133,7 +1133,7 @@ def reconcile_on_start(event_loop=None, timeout_seconds=AUTO_CANCEL_SECONDS):
                     try:
                         clear_closed_trade(order_id)
                     except Exception as e:
-                        print(f"⚠️ Reconcile 移除本地狀態失敗：{e}")
+                        print(f"[error] Reconcile 移除本地狀態失敗：{e}")
                     notify_user(
                         text=(f"🕒 清理：逾時未成交的開倉單已撤\n"
                               f"• 標的: {symbol}\n"
@@ -1283,12 +1283,12 @@ def _attach_exits_after_fill(symbol, position_side, sl_price_str, tp_price_str,
     }
 
     try:
-        print("   [Binance 動作] 成交後掛上止損單 (STOP_MARKET, closePosition=true)...")
+        print("   [Binance] 成交後掛上止損單 (STOP_MARKET, closePosition=true)...")
         res1 = binance_client.new_order(**sl_order_params)
         sl_id = res1.get('orderId')
         print(f"   ✅ SL 已掛上 (ID: {sl_id})")
 
-        print("   [Binance 動作] 成交後掛上止盈單 (TAKE_PROFIT_MARKET, closePosition=true)...")
+        print("   [Binance] 成交後掛上止盈單 (TAKE_PROFIT_MARKET, closePosition=true)...")
         res2 = binance_client.new_order(**tp_order_params)
         tp_id = res2.get('orderId')
         print(f"   ✅ TP 已掛上 (ID: {tp_id})")

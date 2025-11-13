@@ -40,7 +40,7 @@ API_ID = api_config.get('API_ID')
 API_HASH = api_config.get('API_HASH')
 BOT_TOKEN = api_config.get('BOT_TOKEN')
 BOT_CHAT_ID = api_config.get('BOT_CHAT_ID')
-CLIENT_SESSION_NAME = 'my_trading_bot_session'
+CLIENT_SESSION_NAME = 'chao_bi'
 
 # Ollama
 OLLAMA_API_URL = 'http://192.168.50.1:11434/api/generate'
