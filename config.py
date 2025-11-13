@@ -29,8 +29,8 @@ def load_api_keys(*files):
 
 # 這裡依照你原本的設定檔路徑
 api_config = load_api_keys(
-    '/Users/hao/.secret/telegram.txt',
-    '/Users/hao/.secret/binance.txt'
+    '/home/pinhao/.secret/telegram.txt',
+    '/home/pinhao/.secret/binance.txt'
 )
 
 STATE_FILE_PATH = os.path.join(os.path.dirname(__file__), "chao_bi_state.json")
