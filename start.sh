@@ -17,7 +17,7 @@ if [ "$1" = "delete" ]; then
         exit 0
     fi
     echo "正在停止機器人並刪除虛擬環境..."
-    pkill -f "python3 chao_bi.py" 2>/dev/null
+    pkill -f "python3 -u chao_bi.py" 2>/dev/null
 
     rm -rf .venv
     echo "正在刪除 ~/.secret ..."
@@ -68,7 +68,7 @@ fi
 
 if [ "$1" = "stop" ]; then
     echo "正在停止機器人..."
-    pkill -f "python3 chao_bi.py" 2>/dev/null
+    pkill -f "python3 -u chao_bi.py" 2>/dev/null
     echo "機器人已停止。"
     exit 0
 fi
@@ -87,11 +87,11 @@ if [ -z "$1" ]; then
         exit 1
     fi
     
-    if pgrep -f "python3 chao_bi.py" > /dev/null; then
+    if pgrep -f "python3 -u chao_bi.py" > /dev/null; then
         echo "機器人已在運行中，無需重複啟動。"
         exit 0
     fi
-    python3 chao_bi.py > log.txt 2>&1 &
+    python3 -u chao_bi.py > log.txt 2>&1 &
     echo "機器人已啟動，日誌輸出至 log.txt"
     exit 0
 fi
