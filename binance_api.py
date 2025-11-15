@@ -28,6 +28,9 @@ total_available_margin = 0.0
 binance_client = None
 _symbol_max_leverage_cache = {} # 槓桿上限快取
 
+# 追蹤目前已啟動監控的 (symbol, order_id)，避免重複啟動 monitor_and_auto_cancel
+_monitoring_orders: set[tuple[str, int]] = set()
+
 def normalize_aliases(text: str) -> str:
     if not text:
         return text
@@ -953,10 +956,14 @@ def resume_trades_from_state(event_loop=None):
                 clear_closed_trade(entry_id)
                 continue
 
-            # case 1: LIMIT 單還在 NEW/PARTIALLY_FILLED → 恢復長時間監控
+            # case 1: LIMIT 單還在 NEW/PARTIALLY_FILLED → 恢復長時間監控（避免重複啟動）
             if otype == "LIMIT" and status in ("NEW", "PARTIALLY_FILLED"):
-                if event_loop is not None and getattr(event_loop, "is_running", lambda: False)():
+                key_tuple = (symbol, int(entry_id))
+                if key_tuple in _monitoring_orders:
+                    print(f"ℹ️ 開倉單 {entry_id} ({symbol}) 已在監控中，略過重複註冊。")
+                elif event_loop is not None and getattr(event_loop, "is_running", lambda: False)():
                     try:
+                        _monitoring_orders.add(key_tuple)
                         asyncio.run_coroutine_threadsafe(
                             monitor_and_auto_cancel(
                                 symbol,
@@ -971,6 +978,7 @@ def resume_trades_from_state(event_loop=None):
                         )
                         print(f"⏱️ 已恢復監控開倉單 {entry_id} ({symbol})。")
                     except Exception as e:
+                        _monitoring_orders.discard(key_tuple)
                         print(f"⚠️ 恢復監控 {symbol}/{entry_id} 失敗：{e}")
                 else:
                     print(f"⚠️ 事件迴圈不可用，無法恢復監控 {symbol}/{entry_id}。")
@@ -1160,98 +1168,106 @@ def reconcile_on_start(event_loop=None, timeout_seconds=AUTO_CANCEL_SECONDS):
     return summary
 
 async def monitor_and_auto_cancel(symbol, order_id, position_side, sl_price_str, tp_price_str, timeout_seconds=AUTO_CANCEL_SECONDS, poll_interval=ORDER_MONITOR_INTERVAL):
-    """
+    """ 
     監控未成交的『開倉 LIMIT 單』；超過 timeout 仍未完全成交則自動撤單。
     偵測到成交時立刻補掛 SL/TP。
     """
+    key_tuple = (symbol, order_id)
     print(f"   [Monitor] 開始監控 {symbol} 訂單 {order_id}，逾時 {timeout_seconds}s 未成交將撤單。")
     exits_attached = False
     t0 = time.time()
-    while True:
-        await asyncio.sleep(poll_interval)
-        try:
-            q = _query_order(symbol, order_id=order_id)
-            if not q:
-                continue
-            status = str(q.get('status', ''))
-            if status in ('PARTIALLY_FILLED', 'FILLED'):
-                if not exits_attached:
-                    try:
-                        sl_id, tp_id = _attach_exits_after_fill(
-                            symbol,
-                            position_side,
-                            sl_price_str,
-                            tp_price_str,
-                            entry_order_id=order_id
-                        )
-                        exits_attached = True
-                        print(f"   [Monitor] 偵測到成交（{status}），已立刻補掛 SL/TP。")
+    try:
+        while True:
+            await asyncio.sleep(poll_interval)
+            try:
+                q = _query_order(symbol, order_id=order_id)
+                if not q:
+                    continue
+                status = str(q.get('status', ''))
+                if status in ('PARTIALLY_FILLED', 'FILLED'):
+                    if not exits_attached:
+                        try:
+                            sl_id, tp_id = _attach_exits_after_fill(
+                                symbol,
+                                position_side,
+                                sl_price_str,
+                                tp_price_str,
+                                entry_order_id=order_id
+                            )
+                            exits_attached = True
+                            print(f"   [Monitor] 偵測到成交（{status}），已立刻補掛 SL/TP。")
+                            notify_user(
+                                text=(f"📎 監控：補掛 SL/TP\n"
+                                      f"• 標的: {symbol}\n"
+                                      f"• 狀態: {status}\n"
+                                      f"• SL: {sl_price_str} (ID: {sl_id})\n"
+                                      f"• TP: {tp_price_str} (ID: {tp_id})\n"
+                                      f"• OrderID: {order_id}"),
+                                loop=client.loop if client else None
+                            )
+                        except Exception as ee:
+                            print(f"   [Monitor] 補掛 SL/TP 失敗：{ee}")
+                    if status == 'FILLED':
+                        print(f"   [Monitor] 訂單 {order_id} 已完全成交，停止監控。")
+                        # 通知完全成交
                         notify_user(
-                            text=(f"📎 監控：補掛 SL/TP\n"
+                            text=(f"✅ 監控：開倉單已完全成交\n"
                                   f"• 標的: {symbol}\n"
-                                  f"• 狀態: {status}\n"
-                                  f"• SL: {sl_price_str} (ID: {sl_id})\n"
-                                  f"• TP: {tp_price_str} (ID: {tp_id})\n"
                                   f"• OrderID: {order_id}"),
                             loop=client.loop if client else None
                         )
-                    except Exception as ee:
-                        print(f"   [Monitor] 補掛 SL/TP 失敗：{ee}")
-                if status == 'FILLED':
-                    print(f"   [Monitor] 訂單 {order_id} 已完全成交，停止監控。")
-                    # 通知完全成交
-                    notify_user(
-                        text=(f"✅ 監控：開倉單已完全成交\n"
-                              f"• 標的: {symbol}\n"
-                              f"• OrderID: {order_id}"),
-                        loop=client.loop if client else None
-                    )
-                    return
-                # PARTIALLY_FILLED: 繼續等，直到完全成交或逾時
-            elif status in ('CANCELED', 'EXPIRED', 'REJECTED'):
-                print(f"   [Monitor] 訂單 {order_id} 狀態 {status}，停止監控。")
-                try:
-                    clear_closed_trade(order_id)
-                except Exception as e:
-                    print(f"⚠️ 移除本地狀態失敗：{e}")
-                break
-            if time.time() - t0 >= timeout_seconds:
-                if status != 'FILLED':
-                    print(f"   [Monitor] 超過 {timeout_seconds}s 未完全成交，嘗試撤單 {order_id} ...")
+                        return
+                    # PARTIALLY_FILLED: 繼續等，直到完全成交或逾時
+                elif status in ('CANCELED', 'EXPIRED', 'REJECTED'):
+                    print(f"   [Monitor] 訂單 {order_id} 狀態 {status}，停止監控。")
                     try:
-                        binance_client.cancel_order(symbol=symbol, orderId=order_id)
-                        print(f"   ✅ 已撤單 {order_id}（若部分成交，僅撤未成交殘量）。")
+                        clear_closed_trade(order_id)
+                    except Exception as e:
+                        print(f"⚠️ 移除本地狀態失敗：{e}")
+                    break
+                if time.time() - t0 >= timeout_seconds:
+                    if status != 'FILLED':
+                        print(f"   [Monitor] 超過 {timeout_seconds}s 未完全成交，嘗試撤單 {order_id} ...")
                         try:
-                            clear_closed_trade(order_id)
-                            # 通知超時撤單
+                            binance_client.cancel_order(symbol=symbol, orderId=order_id)
+                            print(f"   ✅ 已撤單 {order_id}（若部分成交，僅撤未成交殘量）。")
+                            try:
+                                clear_closed_trade(order_id)
+                                # 通知超時撤單
+                                notify_user(
+                                    text=(f"🕒 監控：超過期限未完全成交，已撤單\n"
+                                        f"• 標的: {symbol}\n"
+                                        f"• OrderID: {order_id}"),
+                                    loop=client.loop if client else None
+                                )
+                            except Exception as e:
+                                print(f"⚠️ 移除本地狀態失敗：{e}")
+                                # 通知超時撤單
+                                notify_user(
+                                    text=(f"🕒 監控：超過期限未完全成交，已撤單，移除本地狀態失敗\n"
+                                        f"• 標的: {symbol}\n"
+                                        f"• OrderID: {order_id}"),
+                                    loop=client.loop if client else None
+                                )
+                        except ClientError as e:
+                            print(f"   ❌ 撤單失敗：{e}")
+                            # 通知撤單失敗
                             notify_user(
-                                text=(f"🕒 監控：超過期限未完全成交，已撤單\n"
-                                    f"• 標的: {symbol}\n"
-                                    f"• OrderID: {order_id}"),
+                                text=(f"⚠️ 監控：撤單失敗\n"
+                                      f"• 標的: {symbol}\n"
+                                      f"• OrderID: {order_id}\n"
+                                      f"• 錯誤: {e}"),
                                 loop=client.loop if client else None
                             )
-                        except Exception as e:
-                            print(f"⚠️ 移除本地狀態失敗：{e}")
-                            # 通知超時撤單
-                            notify_user(
-                                text=(f"🕒 監控：超過期限未完全成交，已撤單，移除本地狀態失敗\n"
-                                    f"• 標的: {symbol}\n"
-                                    f"• OrderID: {order_id}"),
-                                loop=client.loop if client else None
-                            )
-                    except ClientError as e:
-                        print(f"   ❌ 撤單失敗：{e}")
-                        # 通知撤單失敗
-                        notify_user(
-                            text=(f"⚠️ 監控：撤單失敗\n"
-                                  f"• 標的: {symbol}\n"
-                                  f"• OrderID: {order_id}\n"
-                                  f"• 錯誤: {e}"),
-                            loop=client.loop if client else None
-                        )
-                return
-        except Exception as e:
-            print(f"   [Monitor] 查詢訂單時發生錯誤：{e}")
+                    return
+            except Exception as e:
+                print(f"   [Monitor] 查詢訂單時發生錯誤：{e}")
+    finally:
+        # 無論正常結束或遇到例外，皆移除監控標記
+        try:
+            _monitoring_orders.discard(key_tuple)
+        except Exception:
+            pass
 
 def _attach_exits_after_fill(symbol, position_side, sl_price_str, tp_price_str,
                              working_type='MARK_PRICE', entry_order_id=None):
