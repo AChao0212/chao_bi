@@ -22,7 +22,7 @@ MASTER_PROMPT_TEMPLATE = """
 【解析規則】
 1.  **嚴格遵守格式**。如果訊息只是聊天或分析 (例如 "BTC 猛拉起飛中")，'action' 必須是 "NONE"，另外請自動忽略訊息中的表情符號。
 2.  **幣種**: (如 "BTC", "ETH", "SOL", "pippin", "GIGGLE", "TRUMP", "TRUST", "币安人生") 自動附加 "USDT"。
-3.  **方向**: "短" 或 "空" 等同 "SELL"。 "長" 或 "多" 等同 "BUY"。 如果沒有明確的指示，'action' 必須是 "NONE"。
+3.  **方向**: "短" 或 "空" 等同 "SELL"。 "長" 或 "多" 等同 "BUY"。
 4.  **進場 (entry_price)**:
     - 如果是區間 (例如 "146.23-141.70")，請**只取第一個數字** (例如 "146.23")。
     - 如果是 "市價" (例如 "pippin 市價多" 或 "btc 市價空")，`entry_price` 必須設為 `null`。
@@ -37,6 +37,9 @@ MASTER_PROMPT_TEMPLATE = """
 8.  **只回答 JSON 格式的文字**，不要有任何額外的解釋。
 
 【範例】
+
+- 交易訊息
+
 ---
 訊息: "#SOL 多 \n進場：146.23-141.70\n止盈：\n150.0\n155.6\n止損:136.8"
 JSON: {{"action": "BUY", "symbol": "SOLUSDT", "entry_price": "146.23", "take_profit": "150.0", "stop_loss": "136.8", "leverage": null}}
@@ -47,15 +50,15 @@ JSON: {{"action": "BUY", "symbol": "ETHUSDT", "entry_price": "3500", "take_profi
 訊息: "pippin 市價多"
 JSON: {{"action": "BUY", "symbol": "PIPPINUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
-訊息: "btc 市價空"
-JSON: {{"action": "SELL", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
----
 訊息: "AIA 輕倉空"
 JSON: {{"action": "SELL", "symbol": "AIAUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
 訊息: "#GIGGLE 150上方轻仓追空 止损160"
 JSON: {{"action": "SELL", "symbol": "GIGGLEUSDT", "entry_price": "150", "take_profit": null, "stop_loss": "160", "leverage": null}}
 ---
+
+- 廣告訊息
+
 訊息: "#BTC 104000空单目前浮盈1100点🌟，需要进阶群的联系：\n跟单：@qihangbtc1\n双向：@qihangbtcBOT"
 JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
@@ -71,8 +74,11 @@ JSON: {{"action": "NONE", "symbol": null, "entry_price": null, "take_profit": nu
 訊息: "#PHA 猛拉起飛中"
 JSON: {{"action": "NONE", "symbol": "PHAUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
-訊息: "#trump  可惜，墨跡了一天還是沒能反彈出局，這單我的問題止損出"
-JSON: {{"action": "NONE", "symbol": "TRUMPUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+訊息: "#BTC 支撐位多單精準進場浮盈2500點，減倉保本"
+JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+訊息: "💸💸💸💸💸💸\n\nBTC精準接多獲利2800點\nETH佈局3066可惜差2點接到\n\n週末不打烊，日內行情繼續進行 @quanquanzhuli1"
+JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
 
 【任務】

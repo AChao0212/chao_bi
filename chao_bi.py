@@ -683,23 +683,9 @@ async def main_telethon():
     except Exception as e:
         print(f"[warning] 載入狀態檔失敗：{e}")
 
-    # 2) 啟動時對帳（在 executor 裡跑，避免卡住 event loop）
-    try:
-        print("[info] 進行啟動對帳…")
-        await loop.run_in_executor(None, reconcile_on_start, loop)
-    except Exception as e:
-        print(f"[warning] 啟動對帳失敗：{e}")
-
-    # 3) 對帳後恢復監控與 TP/SL 掛單（只跑一次）
-    try:
-        print("[info] 恢復監控與 TP/SL 掛單…")
-        await loop.run_in_executor(None, resume_trades_from_state, loop)
-    except Exception as e:
-        print(f"[warning] 啟動恢復狀態失敗：{e}")
-
-    # 4) 啟動週期性清理孤兒單任務
+    # 2) 啟動週期性清理孤兒單任務
     asyncio.create_task(_periodic_reconcile_task(600))
-    # 5) 啟動每日盈虧通知
+    # 3) 啟動每日盈虧通知
     asyncio.create_task(daily_pnl_notifier('Asia/Taipei', 0, 0))
 
     print(f"[info] 正在監聽 *所有* 訊息 (包含傳出)...")
@@ -714,6 +700,11 @@ async def _periodic_reconcile_task(interval_sec: int = 600):
             await asyncio.get_event_loop().run_in_executor(None, reconcile_on_start, asyncio.get_event_loop())
         except Exception as e:
             print(f"[warning] 週期性 Reconcile 失敗：{e}")
+        try:
+            print("[info] 週期性清理本地 json 單據紀錄")
+            await asyncio.get_event_loop().run_in_executor(None, resume_trades_from_state, loop)
+        except Exception as e:
+            print(f"[warning] 本地端單據清理失敗：{e}")
         # 加一點小抖動，避免每次都撞在同一時間窗（不用額外 import random）
         jitter = (int(time.time()) % 7)  # 0~6 秒
         await asyncio.sleep(interval_sec + jitter)
