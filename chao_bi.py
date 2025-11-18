@@ -8,7 +8,7 @@ from config import (
     INITIAL_FILL_WAIT_SECONDS, INITIAL_POLL_INTERVAL,
 )
 from state_store import (
-    register_entry_trade, load_state,
+    register_entry_trade, load_state, iter_tracked_trades,
 )
 from llm import (
     parse_signal_with_llm,
@@ -528,6 +528,26 @@ async def handle_new_channel_message(event):
         if action in ("BUY", "SELL") and (not symbol or not is_valid_symbol(symbol)):
             print(f"[error] 訊號拒絕：無效或缺失的 symbol（{symbol}），忽略。")
             return
+        
+        # --- [修正開始] 本地重複開倉檢查 ---
+        # 1. 轉換方向定義 (BUY -> LONG, SELL -> SHORT)
+        position_side = "LONG" if action.upper() == "BUY" else "SHORT"
+
+        # 2. 正確遍歷 (key, value)
+        is_duplicate = False
+        for _order_id, rec in iter_tracked_trades():
+            # 比對 symbol 和 position_side
+            if rec.get("symbol") == symbol and rec.get("position_side") == position_side:
+                is_duplicate = True
+                break
+        
+        if is_duplicate:
+            print(f"[error] 訊號拒絕：偵測到本地狀態檔中已有重複倉位（{symbol} {position_side}），忽略。")
+            return
+        # --- [修正結束] ---
+
+        # --- [warning] v32 工作流 Step 1.5: 二次驗證 ---
+
         print("[info] 偵測到有效訊號，正在提交 LLM 進行二次驗證 (策略補充)...")
         entry_price = trade_command_1.get('entry_price') # 可能是 null
         
