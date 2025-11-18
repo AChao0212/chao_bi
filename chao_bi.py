@@ -8,7 +8,7 @@ from config import (
     INITIAL_FILL_WAIT_SECONDS, INITIAL_POLL_INTERVAL,
 )
 from state_store import (
-    register_entry_trade, load_state
+    register_entry_trade, load_state, _trade_in_process,
 )
 from llm import (
     parse_signal_with_llm,
@@ -28,6 +28,7 @@ from binance_api import (
     apply_leverage_override, select_sl_tp_with_user_pref,
     sanitize_targets, reconcile_on_start,
     daily_pnl_notifier, resume_trades_from_state,
+    _monitoring_orders,
 )
 # --- [warning] 導入幣安官方 SDK (v32) [warning] ---
 try:
@@ -280,6 +281,7 @@ def execute_trade(trade_command: dict, event_loop=None):
         entry_resp = binance_client.new_order(**entry_order_params)
         print(f"   ✅ 開倉單已送出。狀態: {entry_resp.get('status')}，ID: {entry_resp.get('orderId')}")
         order_id = entry_resp.get('orderId')
+        _monitoring_orders.add((symbol, order_id))
         try:
             register_entry_trade(
                 symbol=symbol,

@@ -56,6 +56,9 @@ JSON: {{"action": "SELL", "symbol": "AIAUSDT", "entry_price": null, "take_profit
 訊息: "#GIGGLE 150上方轻仓追空 止损160"
 JSON: {{"action": "SELL", "symbol": "GIGGLEUSDT", "entry_price": "150", "take_profit": null, "stop_loss": "160", "leverage": null}}
 ---
+訊息: "#evaa 市價多 小倉"
+JSON: {{"action": "BUY", "symbol": "EVAAUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
 
 - 廣告訊息
 
@@ -79,6 +82,9 @@ JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit
 ---
 訊息: "💸💸💸💸💸💸\n\nBTC精準接多獲利2800點\nETH佈局3066可惜差2點接到\n\n週末不打烊，日內行情繼續進行 @quanquanzhuli1"
 JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+訊息: "#GIGGLE 多單也在盈利中"
+JSON: {{"action": "NONE", "symbol": "GIGGLEUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
 
 【任務】
