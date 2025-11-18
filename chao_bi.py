@@ -8,7 +8,7 @@ from config import (
     INITIAL_FILL_WAIT_SECONDS, INITIAL_POLL_INTERVAL,
 )
 from state_store import (
-    register_entry_trade, load_state, _trade_in_process,
+    register_entry_trade, load_state,
 )
 from llm import (
     parse_signal_with_llm,
