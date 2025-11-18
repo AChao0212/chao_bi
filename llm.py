@@ -50,8 +50,8 @@ JSON: {{"action": "BUY", "symbol": "ETHUSDT", "entry_price": "3500", "take_profi
 訊息: "pippin 市價多"
 JSON: {{"action": "BUY", "symbol": "PIPPINUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
-訊息: "AIA 輕倉空"
-JSON: {{"action": "SELL", "symbol": "AIAUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+訊息: "#FIL 2.09附近輕倉短多"
+JSON: {{"action": "BUY", "symbol": "FILUSDT", "entry_price": "2.09", "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
 訊息: "#GIGGLE 150上方轻仓追空 止损160"
 JSON: {{"action": "SELL", "symbol": "GIGGLEUSDT", "entry_price": "150", "take_profit": null, "stop_loss": "160", "leverage": null}}
