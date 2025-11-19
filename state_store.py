@@ -33,7 +33,8 @@ def save_state():
         print(f"⚠️ 寫入狀態檔失敗：{e}")
 
 def register_entry_trade(symbol, position_side, order_type, entry_price, quantity,
-                         leverage, stop_loss, take_profit, entry_order_id):
+                         leverage, stop_loss, take_profit, entry_order_id,
+                         channel_title, raw_signal):
     """
     註冊一筆新的開倉交易。
     建議傳進來的 entry_price / stop_loss / take_profit / quantity / leverage 都是字串。
@@ -56,6 +57,8 @@ def register_entry_trade(symbol, position_side, order_type, entry_price, quantit
         "tp_order_id": None,
         "created_at": now_iso,
         "updated_at": now_iso,
+        "channel_title": channel_title,
+        "raw_signal": raw_signal,
     }
     save_state()
     print(f"📝 已記錄開倉單 {entry_order_id} 於狀態檔。")

@@ -11,10 +11,12 @@ from config import (
     AUTO_CANCEL_SECONDS, ORDER_MONITOR_INTERVAL, PER_SYMBOL_SLEEP_SEC,
 )
 from telegram import client, notify_user
+from trade_logger import log_trade
 from binance.um_futures import UMFutures
 from binance.error import ClientError
 from datetime import datetime, timedelta
 from state_store import _tracked_trades, update_exits_for_trade, clear_closed_trade
+from trade_logger import log_trade
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -1116,6 +1118,39 @@ def reconcile_on_start(event_loop=None, timeout_seconds=AUTO_CANCEL_SECONDS):
                                   f"• OrderID: {order_id}"),
                             loop=event_loop
                         )
+
+                        # --- LOGGING ---
+                        entry_order_id = None
+                        for key, trade in _tracked_trades.items():
+                            if trade.get('sl_order_id') == order_id or trade.get('tp_order_id') == order_id:
+                                entry_order_id = key
+                                break
+                        
+                        if entry_order_id and entry_order_id in _tracked_trades:
+                            trade_to_log = _tracked_trades[entry_order_id]
+                            try:
+                                user_trades = binance_client.user_trades(symbol=symbol, limit=10)
+                                for user_trade in reversed(user_trades):
+                                    if user_trade['orderId'] == order_id:
+                                        pnl = float(user_trade.get('realizedPnl', 0.0))
+                                        win_loss_draw = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'DRAW'
+                                        log_trade({
+                                            'symbol': symbol,
+                                            'position_side': pos_side,
+                                            'entry_price': trade_to_log.get('entry_price'),
+                                            'exit_price': user_trade.get('price'),
+                                            'quantity': trade_to_log.get('quantity'),
+                                            'leverage': trade_to_log.get('leverage'),
+                                            'pnl': pnl,
+                                            'signal_source': trade_to_log.get('channel_title'),
+                                            'win_loss_draw': win_loss_draw,
+                                            'raw_signal': trade_to_log.get('raw_signal')
+                                        })
+                                        clear_closed_trade(entry_order_id)
+                                        break
+                            except Exception as e:
+                                print(f"[error] Failed to log trade {entry_order_id}: {e}")
+
                     continue
                 # 備用: 若仍不在 pos_set，亦撤單 (防不一致)
                 if (symbol, pos_side) not in pos_set:

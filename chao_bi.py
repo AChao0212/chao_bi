@@ -73,6 +73,8 @@ def execute_trade(trade_command: dict, event_loop=None):
     take_profit_price = trade_command.get('take_profit')
     quantity = trade_command.get('quantity')
     signal_text = trade_command.get('signal_text') or ''
+    channel_title = trade_command.get('channel_title') or 'Unknown'
+    raw_signal = trade_command.get('raw_signal') or ''
 
     # 1) 設定槓桿（並取得實際生效倍數）
     requested_leverage = None if (trade_command.get('leverage') is None) else int(trade_command.get('leverage'))
@@ -293,6 +295,8 @@ def execute_trade(trade_command: dict, event_loop=None):
                 stop_loss=formatted_sl_price,
                 take_profit=formatted_tp_price,
                 entry_order_id=order_id,
+                channel_title=channel_title,
+                raw_signal=raw_signal,
             )
         except Exception as e:
             print(f"[warning] 記錄開倉單狀態失敗（不影響下單）：{e}")
@@ -677,7 +681,9 @@ async def handle_new_channel_message(event):
                 "stop_loss": final_stop_loss,
                 "leverage": int(final_leverage),
                 "quantity": final_quantity,
-                "signal_text": signal_text
+                "signal_text": signal_text,
+                "channel_title": channel_title,
+                "raw_signal": message_text,
             }
 
             await loop.run_in_executor(None, execute_trade, final_trade_command, loop)
