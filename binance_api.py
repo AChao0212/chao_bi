@@ -16,7 +16,6 @@ from binance.um_futures import UMFutures
 from binance.error import ClientError
 from datetime import datetime, timedelta
 from state_store import _tracked_trades, update_exits_for_trade, clear_closed_trade
-from trade_logger import log_trade
 try:
     from zoneinfo import ZoneInfo
 except Exception:

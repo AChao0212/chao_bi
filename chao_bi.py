@@ -30,6 +30,7 @@ from binance_api import (
     daily_pnl_notifier, resume_trades_from_state,
     _monitoring_orders,
 )
+from trade_logger import log_trade
 # --- [warning] 導入幣安官方 SDK (v32) [warning] ---
 try:
     from binance.error import ClientError
@@ -298,6 +299,17 @@ def execute_trade(trade_command: dict, event_loop=None):
                 channel_title=channel_title,
                 raw_signal=raw_signal,
             )
+            log_trade({
+                'symbol': symbol,
+                'position_side': position_side,
+                'entry_price': (formatted_price or (str(ref_price_dec) if ref_price_dec is not None else None)),
+                'quantity': formatted_quantity,
+                'leverage': leverage,
+                'stop_loss': formatted_sl_price,
+                'take_profit': formatted_tp_price,
+                'signal_source': channel_title,
+                'raw_signal': raw_signal,
+            })
         except Exception as e:
             print(f"[warning] 記錄開倉單狀態失敗（不影響下單）：{e}")
         try:

@@ -2,9 +2,7 @@
 import csv
 import os
 from datetime import datetime
-
-# The path to the CSV file where trade logs will be stored.
-CSV_LOG_PATH = "trade_log.csv"
+from config import TRADE_LOG_CSV_PATH
 
 # The headers for the CSV file.
 CSV_HEADERS = [
@@ -30,9 +28,9 @@ def log_trade(trade_details):
                               It should include keys matching the CSV_HEADERS.
     """
     # Check if the CSV file exists. If not, create it and write the headers.
-    file_exists = os.path.exists(CSV_LOG_PATH)
+    file_exists = os.path.exists(TRADE_LOG_CSV_PATH)
     
-    with open(CSV_LOG_PATH, mode='a', newline='', encoding='utf-8') as csv_file:
+    with open(TRADE_LOG_CSV_PATH, mode='a', newline='', encoding='utf-8') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=CSV_HEADERS)
         
         # If the file is new, write the header row first.
@@ -48,34 +46,7 @@ def log_trade(trade_details):
         # Write the trade's data to the CSV file.
         writer.writerow(row_data)
         
-def log_trade(trade_details):
-    """
-    Logs the details of a completed trade to a CSV file.
-
-    Args:
-        trade_details (dict): A dictionary containing the trade's information.
-                              It should include keys matching the CSV_HEADERS.
-    """
-    # Check if the CSV file exists. If not, create it and write the headers.
-    file_exists = os.path.exists(CSV_LOG_PATH)
-    
-    with open(CSV_LOG_PATH, mode='a', newline='', encoding='utf-8') as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=CSV_HEADERS)
-        
-        # If the file is new, write the header row first.
-        if not file_exists:
-            writer.writeheader()
-        
-        # Prepare the row data from the trade_details dictionary.
-        row_data = {header: trade_details.get(header, "") for header in CSV_HEADERS}
-        
-        # Set the timestamp for when the trade is being logged.
-        row_data["timestamp"] = datetime.utcnow().isoformat()
-
-        # Write the trade's data to the CSV file.
-        writer.writerow(row_data)
-        
-    print(f"📈 Trade logged to {CSV_LOG_PATH}: Symbol={row_data['symbol']}, PnL={row_data['pnl']}")
+    print(f"📈 Trade logged to {TRADE_LOG_CSV_PATH}: Symbol={row_data['symbol']}, PnL={row_data['pnl']}")
 
 def get_trade_statistics():
     """
@@ -92,7 +63,7 @@ def get_trade_statistics():
             - draw_rate (float)
             - total_pnl (float)
     """
-    if not os.path.exists(CSV_LOG_PATH):
+    if not os.path.exists(TRADE_LOG_CSV_PATH):
         return {
             "total_trades": 0,
             "winning_trades": 0,
@@ -110,7 +81,7 @@ def get_trade_statistics():
     draw_trades = 0
     total_pnl = 0.0
 
-    with open(CSV_LOG_PATH, mode='r', newline='', encoding='utf-8') as csv_file:
+    with open(TRADE_LOG_CSV_PATH, mode='r', newline='', encoding='utf-8') as csv_file:
         reader = csv.DictReader(csv_file)
         for row in reader:
             total_trades += 1

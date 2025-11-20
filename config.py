@@ -34,6 +34,7 @@ api_config = load_api_keys(
 )
 
 STATE_FILE_PATH = os.path.join(os.path.dirname(__file__), "chao_bi_state.json")
+TRADE_LOG_CSV_PATH = os.path.join(os.path.dirname(__file__), "trade_log.csv")
 
 # Telegram 設定
 API_ID = api_config.get('API_ID')
