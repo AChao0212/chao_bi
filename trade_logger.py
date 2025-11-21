@@ -1,7 +1,7 @@
 
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import TRADE_LOG_CSV_PATH
 
 # The headers for the CSV file.
@@ -41,7 +41,7 @@ def log_trade(trade_details):
         row_data = {header: trade_details.get(header, "") for header in CSV_HEADERS}
         
         # Set the timestamp for when the trade is being logged.
-        row_data["timestamp"] = datetime.utcnow().isoformat()
+        row_data["timestamp"] = (datetime.utcnow() + timedelta(hours=8)).isoformat()
 
         # Write the trade's data to the CSV file.
         writer.writerow(row_data)

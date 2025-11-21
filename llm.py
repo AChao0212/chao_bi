@@ -86,6 +86,9 @@ JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit
 訊息: "#GIGGLE 多單也在盈利中"
 JSON: {{"action": "NONE", "symbol": "GIGGLEUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
+訊息: "🤑VIP內部群早間6分鐘也是快速帶夥伴們拿到兩倍\n\n#LIGHT  多單📈\n\n收益💰   190.80%\n目標🎯   TP1✅\n\n會員專享： \n 一對一在線指導｜精準止盈止損\n👉點擊免費加入會員群👈"
+JSON: {{"action": "NONE", "symbol": "LIGHTUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
 
 【任務】
 請解析以下訊息：
