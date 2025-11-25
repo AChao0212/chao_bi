@@ -915,6 +915,87 @@ def _get_all_open_orders():
             continue
     return results
 
+def _handle_closed_trade_logging(entry_id, trade_record, symbol):
+    """
+    輔助函數：當偵測到倉位已平倉時，判斷平倉原因 (TP/SL/Manual)
+    並計算 PnL，最後寫入 Log。
+    """
+    try:
+        sl_id = trade_record.get('sl_order_id')
+        tp_id = trade_record.get('tp_order_id')
+        
+        closing_order_id = None
+        outcome = 'MANUAL' # 預設為手動或未知
+        
+        # 1. 檢查 TP 是否成交 (WIN)
+        if tp_id:
+            tp_ord = _query_order(symbol, order_id=tp_id)
+            if tp_ord and tp_ord.get('status') == 'FILLED':
+                closing_order_id = tp_id
+                outcome = 'WIN'
+        
+        # 2. 若 TP 未成交，檢查 SL 是否成交 (LOSS)
+        if not closing_order_id and sl_id:
+            sl_ord = _query_order(symbol, order_id=sl_id)
+            if sl_ord and sl_ord.get('status') == 'FILLED':
+                closing_order_id = sl_id
+                outcome = 'LOSS'
+
+        # 3. 根據成交的訂單 ID 抓取 PnL
+        realized_pnl = 0.0
+        exit_price = 0.0
+        
+        if closing_order_id:
+            # 查詢該訂單的所有成交紀錄 (可能分批成交)
+            trades = binance_client.user_trades(symbol=symbol, orderId=closing_order_id)
+            if trades:
+                # 加總 Realized PnL
+                realized_pnl = sum(float(t.get('realizedPnl', 0.0)) for t in trades)
+                # 取最後一筆成交價當作 exit_price (近似)
+                exit_price = trades[-1].get('price', 0.0)
+                
+                # 清理剩下的那一張單 (例如 TP 成交了，把 SL 撤掉)
+                if closing_order_id == tp_id and sl_id:
+                    _cancel_order_safely(symbol, sl_id)
+                elif closing_order_id == sl_id and tp_id:
+                    _cancel_order_safely(symbol, tp_id)
+        else:
+            # 手動平倉的情況：很難精確對應到哪一筆 trade，
+            # 這裡可以選擇抓取最近一筆該幣種的 "reduceOnly" 交易來估算，或者記為 0
+            # 簡單起見，這裡先記為 0 或嘗試抓最後一筆
+            try:
+                recent_trades = binance_client.user_trades(symbol=symbol, limit=5)
+                if recent_trades:
+                    last_trade = recent_trades[-1]
+                    # 簡單檢核：如果最近這筆是平倉單 (與開倉方向相反)，就暫時拿它的 PnL
+                    # 但這不一定準確 (可能混到其他單)。
+                    realized_pnl = float(last_trade.get('realizedPnl', 0.0))
+                    exit_price = last_trade.get('price', 0.0)
+                    # 修正 outcome 根據 PnL 正負
+                    if realized_pnl > 0: outcome = 'WIN'
+                    elif realized_pnl < 0: outcome = 'LOSS'
+                    else: outcome = 'DRAW'
+            except Exception:
+                pass
+
+        # 4. 寫入 CSV
+        log_trade({
+            'symbol': symbol,
+            'position_side': trade_record.get('position_side'),
+            'entry_price': trade_record.get('entry_price'),
+            'exit_price': exit_price,
+            'quantity': trade_record.get('quantity'),
+            'leverage': trade_record.get('leverage'),
+            'pnl': realized_pnl,
+            'signal_source': trade_record.get('channel_title'),
+            'win_loss_draw': outcome,
+            'raw_signal': trade_record.get('raw_signal')
+        })
+        
+    except Exception as e:
+        print(f"[error] 記錄交易失敗 (Entry {entry_id}): {e}")
+
+
 def resume_trades_from_state(event_loop=None):
     """
     程式重啟後，根據 chao_bi_state.json 嘗試恢復：
@@ -985,15 +1066,22 @@ def resume_trades_from_state(event_loop=None):
                     print(f"⚠️ 事件迴圈不可用，無法恢復監控 {symbol}/{entry_id}。")
                 continue
 
-            # case 2: 已經 FILLED/部分成交且有持倉，但可能缺少 SL/TP → 補掛
+            # case 2: 已經 FILLED/部分成交且有持倉
             if status in ("FILLED", "PARTIALLY_FILLED"):
                 pos_amt = _get_position_amount(symbol, position_side)
+                
+                # --- [NEW] 倉位已平倉 (0) 的處理 ---
                 if pos_amt == 0:
-                    # 沒有倉位了，清掉紀錄
+                    print(f"ℹ️ 偵測到 {symbol} 倉位已平倉，正在計算 PnL 並歸檔...")
+                    # 呼叫新寫好的 Log 函數
+                    _handle_closed_trade_logging(entry_id, rec, symbol)
+                    
+                    # 清除本地紀錄
                     clear_closed_trade(entry_id)
                     continue
+                # ---------------------------------
 
-                # 檢查是否已存在 closePosition/reduceOnly 的 SL/TP 單
+                # 還有倉位，繼續檢查是否缺少 SL/TP
                 try:
                     open_ods = _sdk_get_open_orders(symbol)
                 except Exception as e:
@@ -1117,39 +1205,6 @@ def reconcile_on_start(event_loop=None, timeout_seconds=AUTO_CANCEL_SECONDS):
                                   f"• OrderID: {order_id}"),
                             loop=event_loop
                         )
-
-                        # --- LOGGING ---
-                        entry_order_id = None
-                        for key, trade in _tracked_trades.items():
-                            if trade.get('sl_order_id') == order_id or trade.get('tp_order_id') == order_id:
-                                entry_order_id = key
-                                break
-                        
-                        if entry_order_id and entry_order_id in _tracked_trades:
-                            trade_to_log = _tracked_trades[entry_order_id]
-                            try:
-                                user_trades = binance_client.user_trades(symbol=symbol, limit=10)
-                                for user_trade in reversed(user_trades):
-                                    if user_trade['orderId'] == order_id:
-                                        pnl = float(user_trade.get('realizedPnl', 0.0))
-                                        win_loss_draw = 'WIN' if pnl > 0 else 'LOSS' if pnl < 0 else 'DRAW'
-                                        log_trade({
-                                            'symbol': symbol,
-                                            'position_side': pos_side,
-                                            'entry_price': trade_to_log.get('entry_price'),
-                                            'exit_price': user_trade.get('price'),
-                                            'quantity': trade_to_log.get('quantity'),
-                                            'leverage': trade_to_log.get('leverage'),
-                                            'pnl': pnl,
-                                            'signal_source': trade_to_log.get('channel_title'),
-                                            'win_loss_draw': win_loss_draw,
-                                            'raw_signal': trade_to_log.get('raw_signal')
-                                        })
-                                        clear_closed_trade(entry_order_id)
-                                        break
-                            except Exception as e:
-                                print(f"[error] Failed to log trade {entry_order_id}: {e}")
-
                     continue
                 # 備用: 若仍不在 pos_set，亦撤單 (防不一致)
                 if (symbol, pos_side) not in pos_set:
