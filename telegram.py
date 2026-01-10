@@ -1,58 +1,94 @@
+"""
+Telegram Integration Module.
+
+Provides Telegram client setup and notification functions.
+"""
+
 import requests
 from config import (
-    BOT_TOKEN, BOT_CHAT_ID,
-    API_ID, API_HASH,
-    CLIENT_SESSION_NAME
+    BOT_TOKEN,
+    BOT_CHAT_ID,
+    API_ID,
+    API_HASH,
+    CLIENT_SESSION_NAME,
 )
-# --- 導入 Telethon (v32) ---
+from logger import ModuleLogger
+
+# Initialize logger
+log = ModuleLogger("telegram")
+
+# =============================================================================
+# TELEGRAM CLIENT SETUP
+# =============================================================================
+
 try:
     from telethon import TelegramClient
     from telethon.tl.functions.messages import ImportChatInviteRequest
 except ImportError as e:
-    print(f"[error] 致命錯誤：找不到 'telethon' 模組！")
-    print(f"錯誤詳情: {e}")
-    exit()
+    log.error(f"Telethon module not found: {e}")
+    exit(1)
 
-# --- 5. 📞 Telethon 客戶端 (v32 工作流) ---
 client = None
-if not API_ID or not API_HASH:
-    print("[error] 找不到 'telegram.txt' 或金鑰不完整。")
-else:
-    try:
-        client = TelegramClient(CLIENT_SESSION_NAME, API_ID, API_HASH)
-    except Exception as e:
-        print(f"[error] Telethon 錯誤: {e}")
-        client = None
+try:
+    client = TelegramClient(CLIENT_SESSION_NAME, API_ID, API_HASH)
+except Exception as e:
+    log.error(f"Failed to create Telegram client: {e}")
+    client = None
+
+
+# =============================================================================
+# NOTIFICATION FUNCTIONS
+# =============================================================================
 
 def notify_via_bot_api(text: str) -> bool:
-    """若提供 BOT_TOKEN/BOT_CHAT_ID，透過 Telegram Bot API 送訊息（會觸發推播）。"""
+    """
+    Send notification via Telegram Bot API.
+
+    This method is preferred as it triggers push notifications.
+
+    Args:
+        text: Message text to send
+
+    Returns:
+        True if successful, False otherwise
+    """
     if not BOT_TOKEN or not BOT_CHAT_ID:
         return False
+
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": BOT_CHAT_ID,
             "text": text,
-            "disable_notification": False,  # 確保會推播
-            "parse_mode": "HTML"
+            "disable_notification": False,
+            "parse_mode": "HTML",
         }
-        r = requests.post(url, data=payload, timeout=10)
-        if r.status_code == 200 and r.json().get("ok"):
+        response = requests.post(url, data=payload, timeout=10)
+
+        if response.status_code == 200 and response.json().get("ok"):
             return True
         else:
-            print(f"⚠️ Bot API 通知失敗：{r.status_code} {r.text}")
+            log.error(f"Bot API failed: {response.status_code} {response.text}")
             return False
+
     except Exception as e:
-        print(f"⚠️ Bot API 通知例外：{e}")
+        log.error(f"Bot API exception: {e}")
         return False
 
-def notify_user(text: str, loop=None):
+
+def notify_user(text: str, loop=None) -> None:
     """
-    先嘗試用 Bot API（可推播），失敗才退回 Telethon（同帳號訊息可能不推播）。
+    Send notification to user.
+
+    Tries Bot API first (supports push notifications),
+    falls back to Telethon client if Bot API fails.
+
+    Args:
+        text: Message text to send
+        loop: Event loop for async operations (optional)
     """
     try:
-        # 1) 優先走 Bot 推播
         if notify_via_bot_api(text):
             return
     except Exception as e:
-        print(f"⚠️ 通知排程失敗：{e}")
+        log.error(f"Notification failed: {e}")
