@@ -29,7 +29,7 @@ DEFAULT_LEVEL = logging.INFO
 # =============================================================================
 
 class ChineseFormatter(logging.Formatter):
-    """Custom formatter with Chinese-friendly level names."""
+    """Custom formatter with Chinese-friendly level names and fixed-width fields."""
 
     LEVEL_NAMES = {
         logging.DEBUG: "debug",
@@ -39,10 +39,14 @@ class ChineseFormatter(logging.Formatter):
         logging.CRITICAL: "fatal",
     }
 
+    MODULE_WIDTH = 12  # Fixed width for module name
+
     def format(self, record: logging.LogRecord) -> str:
         level_name = self.LEVEL_NAMES.get(record.levelno, "unknown")
         module_name = record.name.split(".")[-1] if record.name else "root"
-        return f"[{level_name}] [{module_name}]: {record.getMessage()}"
+        # Pad or truncate module name to fixed width
+        module_formatted = module_name[:self.MODULE_WIDTH].ljust(self.MODULE_WIDTH)
+        return f"[{level_name}] [{module_formatted}] {record.getMessage()}"
 
 
 # =============================================================================
@@ -138,8 +142,13 @@ class ModuleLogger:
         log.error("API call failed")
         log.notify("Order placed", telegram=True)
 
-    Output format: [level] [module] [function]: message
+    Output format: [level] [module     ] [function_name     ] message
+    Fixed width: module=12 chars, function=24 chars
     """
+
+    # Fixed widths for alignment
+    MODULE_WIDTH = 12
+    FUNC_WIDTH = 24
 
     def __init__(self, module_name: str):
         self.logger = get_logger(module_name)
@@ -147,7 +156,7 @@ class ModuleLogger:
 
     def _get_caller_func(self) -> str:
         """Get the name of the calling function."""
-        # Go up 3 frames: _get_caller_func -> log method -> actual caller
+        # Go up 3 frames: _get_caller_func -> _format_message -> log method -> actual caller
         frame = inspect.currentframe()
         try:
             caller_frame = frame.f_back.f_back.f_back
@@ -158,9 +167,11 @@ class ModuleLogger:
             del frame
 
     def _format_message(self, message: str) -> str:
-        """Format message with function name."""
+        """Format message with fixed-width function name."""
         func_name = self._get_caller_func()
-        return f"[{func_name}]: {message}"
+        # Pad or truncate to fixed width
+        func_formatted = func_name[:self.FUNC_WIDTH].ljust(self.FUNC_WIDTH)
+        return f"[{func_formatted}] {message}"
 
     def debug(self, message: str) -> None:
         """Log a debug message."""

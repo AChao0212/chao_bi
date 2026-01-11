@@ -163,20 +163,13 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
         resp = client.rest_api.account_information_v3()
         raw_data = resp.data()
 
-        # Debug: understand the response structure
-        log.info(f"Response type: {type(raw_data).__name__}")
-        log.info(f"Response dir: {[x for x in dir(raw_data) if not x.startswith('_')][:15]}")
-
-        # Try to access availableBalance directly as attribute
-        if hasattr(raw_data, "availableBalance"):
-            total_available_margin = float(raw_data.availableBalance or 0)
-            log.info(f"Got balance via attribute: {total_available_margin}")
-        elif hasattr(raw_data, "available_balance"):
+        # Try to access available_balance directly as attribute (new SDK uses snake_case)
+        if hasattr(raw_data, "available_balance"):
             total_available_margin = float(raw_data.available_balance or 0)
-            log.info(f"Got balance via snake_case attribute: {total_available_margin}")
+        elif hasattr(raw_data, "availableBalance"):
+            total_available_margin = float(raw_data.availableBalance or 0)
         else:
             account_info = _to_dict(raw_data)
-            log.info(f"Dict keys: {list(account_info.keys())[:10]}")
             total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
 
         if total_available_margin <= 0:
@@ -185,15 +178,6 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
 
         log.info("Binance connection successful")
         log.info(f"Available balance: {total_available_margin} USDT")
-
-        # Debug: print available REST API methods
-        api_methods = [m for m in dir(client.rest_api) if not m.startswith('_') and callable(getattr(client.rest_api, m, None))]
-        log.info(f"Available API methods (first 30): {api_methods[:30]}")
-        # Find kline and leverage related methods
-        kline_methods = [m for m in api_methods if 'kline' in m.lower()]
-        leverage_methods = [m for m in api_methods if 'leverage' in m.lower()]
-        log.info(f"Kline methods: {kline_methods}")
-        log.info(f"Leverage methods: {leverage_methods}")
 
         return client
 
@@ -626,39 +610,60 @@ def get_max_leverage(symbol: str) -> int:
         resp = binance_client.rest_api.notional_and_leverage_brackets(symbol=symbol)
         raw_data = resp.data()
 
-        # Debug: understand response structure
-        log.info(f"Leverage brackets response type: {type(raw_data).__name__}")
+        # SDK returns OneOf type - actual data is in actual_instance
+        if hasattr(raw_data, "actual_instance"):
+            raw_data = raw_data.actual_instance
 
         # Handle response - could be list directly or wrapped
         if isinstance(raw_data, list):
             data = raw_data
         else:
-            temp = _to_dict(raw_data)
-            log.info(f"Leverage brackets keys: {list(temp.keys())[:10]}")
-            data = temp.get("_list") or [temp] if temp else []
+            # Try to get list from object
+            if hasattr(raw_data, "__iter__") and not isinstance(raw_data, (str, dict)):
+                data = list(raw_data)
+            else:
+                temp = _to_dict(raw_data)
+                data = temp.get("_list") or [temp] if temp else []
 
         if data and len(data) > 0:
-            first_item = _to_dict(data[0]) if not isinstance(data[0], dict) else data[0]
-            log.info(f"First bracket item keys: {list(first_item.keys())}")
-            brackets = first_item.get("brackets") or []
+            first_item = data[0]
 
-            # If brackets is empty, try to access as attribute
-            if not brackets and hasattr(data[0], "brackets"):
-                brackets = data[0].brackets or []
+            # Access actual_instance if it's a OneOf wrapper
+            if hasattr(first_item, "actual_instance"):
+                first_item = first_item.actual_instance
+
+            first_dict = _to_dict(first_item) if not isinstance(first_item, dict) else first_item
+
+            # Get brackets - try attribute first, then dict key
+            brackets = []
+            if hasattr(first_item, "brackets"):
+                brackets = first_item.brackets or []
+            if not brackets:
+                brackets = first_dict.get("brackets") or []
 
             max_lev = 0
             for b in brackets:
+                # Access actual_instance if wrapper
+                if hasattr(b, "actual_instance"):
+                    b = b.actual_instance
+
                 b_dict = _to_dict(b) if not isinstance(b, dict) else b
-                lev = int(b_dict.get("initialLeverage") or b_dict.get("initial_leverage") or 0)
+
+                # Try attribute access first
+                if hasattr(b, "initial_leverage"):
+                    lev = int(b.initial_leverage or 0)
+                else:
+                    lev = int(b_dict.get("initialLeverage") or b_dict.get("initial_leverage") or 0)
+
                 if lev > max_lev:
                     max_lev = lev
 
-            log.info(f"Max leverage found for {symbol}: {max_lev}")
             if max_lev > 0:
+                log.info(f"Max leverage for {symbol}: {max_lev}x")
                 return max_lev
 
     except Exception as e:
-        log.error(f"Failed to get max leverage for {symbol}: {e}, using default")
+        log.error(f"Failed to get max leverage for {symbol}: {e}")
 
     return int(DEFAULT_LEVERAGE)
 
