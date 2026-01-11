@@ -544,13 +544,6 @@ async def periodic_reconcile_task(loop: asyncio.AbstractEventLoop, interval_sec:
         except Exception as e:
             log.error(f"State cleanup failed: {e}")
 
-        try:
-            synced = await loop.run_in_executor(None, binance_api.sync_external_positions)
-            if synced > 0:
-                log.info(f"Synced {synced} external position(s)")
-        except Exception as e:
-            log.error(f"External position sync failed: {e}")
-
         await asyncio.sleep(interval_sec)
 
 
