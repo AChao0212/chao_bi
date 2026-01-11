@@ -2,12 +2,22 @@
 import os
 from decimal import Decimal
 
+# Fixed width format to match logger.py
+_MODULE_WIDTH = 12
+_FUNC_WIDTH = 24
+_MODULE = "config".ljust(_MODULE_WIDTH)
+_FUNC = "load_api_keys".ljust(_FUNC_WIDTH)
+
+def _log(level: str, message: str):
+    """Print log message with unified format."""
+    print(f"[{level}] [{_MODULE}] [{_FUNC}]: {message}")
+
 def load_api_keys(*files):
     """從多個檔案載入 KEY=VALUE 格式的設定。"""
     config = {}
     for file_name in files:
         if not os.path.exists(file_name):
-            print(f"[error] [config]: 找不到金鑰檔案 '{file_name}'，請確認是否存在。")
+            _log("error", f"找不到金鑰檔案 '{file_name}'，請確認是否存在。")
             exit()
         try:
             with open(file_name, 'r') as f:
@@ -21,10 +31,10 @@ def load_api_keys(*files):
                         value = value.strip().strip("'\"")
                         config[key] = value
                     except ValueError:
-                        print(f"[error] [config]: 格式錯誤，跳過 '{file_name}' 中的行: {line}")
-            print(f"[messg] [config]: 已成功從 '{file_name}' 載入金鑰。")
+                        _log("error", f"格式錯誤，跳過 '{file_name}' 中的行: {line}")
+            _log("messg", f"已成功從 '{file_name}' 載入金鑰。")
         except Exception as e:
-            print(f"[error] [config]: 讀取 '{file_name}' 時發生錯誤: {e}")
+            _log("error", f"讀取 '{file_name}' 時發生錯誤: {e}")
     return config
 
 # 這裡依照你原本的設定檔路徑

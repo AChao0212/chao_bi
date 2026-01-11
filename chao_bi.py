@@ -179,6 +179,7 @@ def compute_order_parameters(
 
     # Cap by margin limit
     max_margin = Decimal(str(binance_api.total_available_margin)) * Decimal(str(MAX_INITIAL_MARGIN_PCT))
+    original_qty = quantity
     quantity = binance_api.cap_quantity_by_margin(
         ref_price,
         Decimal(str(leverage)),
@@ -189,7 +190,14 @@ def compute_order_parameters(
     )
 
     if quantity <= 0:
-        raise RuntimeError("Calculated quantity is zero or negative")
+        # Calculate minimum required balance for this trade
+        min_notional_value = min_qty * ref_price
+        min_margin_required = min_notional_value / Decimal(str(leverage))
+        min_balance_required = min_margin_required / Decimal(str(MAX_INITIAL_MARGIN_PCT))
+        raise RuntimeError(
+            f"Insufficient balance. Need ~{min_balance_required:.2f} USDT for {symbol} "
+            f"(min_qty={min_qty}, current balance={binance_api.total_available_margin:.2f})"
+        )
 
     # Format values
     f_qty = binance_api.format_value(quantity, quantity_precision)
@@ -458,9 +466,27 @@ async def handle_message(event) -> None:
         if not message or not message.text:
             return
 
+        # Skip outgoing messages (sent by us/bot)
+        if message.out:
+            return
+
+        # Skip messages from bots
+        sender = await message.get_sender()
+        if sender and getattr(sender, "bot", False):
+            return
+
         chat = await event.get_chat()
         channel_title = getattr(chat, "title", None) or getattr(chat, "username", "DM")
         message_text = message.text.strip()
+
+        # Skip messages that look like bot notifications
+        bot_patterns = [
+            "Order placed", "Order filled", "Order cancelled", "Order failed",
+            "Trade rejected", "SL/TP attached", "Position closed",
+            "Cleaned orphan", "Cancelled stale", "Reconciliation complete",
+        ]
+        if any(message_text.startswith(p) for p in bot_patterns):
+            return
 
         loop = asyncio.get_running_loop()
         await process_signal(message_text, channel_title, loop)

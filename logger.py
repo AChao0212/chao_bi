@@ -171,7 +171,7 @@ class ModuleLogger:
         func_name = self._get_caller_func()
         # Pad or truncate to fixed width
         func_formatted = func_name[:self.FUNC_WIDTH].ljust(self.FUNC_WIDTH)
-        return f"[{func_formatted}] {message}"
+        return f"[{func_formatted}]: {message}"
 
     def debug(self, message: str) -> None:
         """Log a debug message."""

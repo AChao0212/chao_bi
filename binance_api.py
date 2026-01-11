@@ -1133,7 +1133,7 @@ async def monitor_entry_order(
         poll_interval: Polling interval in seconds
     """
     key = (symbol, order_id)
-    log.info(f"[Monitor] Starting monitor for {symbol} order {order_id}, timeout {timeout_seconds}s")
+    log.info(f"Starting monitor for {symbol} order {order_id}, timeout {timeout_seconds}s")
 
     exits_attached = False
     start_time = time.time()
@@ -1157,7 +1157,7 @@ async def monitor_entry_order(
                             entry_order_id=order_id
                         )
                         exits_attached = True
-                        log.info(f"[Monitor] Order filled ({status}), SL/TP attached")
+                        log.info(f"Order filled ({status}), SL/TP attached")
 
                         _notify_user(
                             f"Order filled - SL/TP attached\n"
@@ -1168,10 +1168,10 @@ async def monitor_entry_order(
                             loop=_telegram_client.loop if _telegram_client else None
                         )
                     except Exception as e:
-                        log.error(f"[Monitor] Failed to attach SL/TP: {e}")
+                        log.error(f"Failed to attach SL/TP: {e}")
 
                 if status == "FILLED":
-                    log.info(f"[Monitor] Order {order_id} fully filled, stopping monitor")
+                    log.info(f"Order {order_id} fully filled, stopping monitor")
                     _notify_user(
                         f"Entry order filled\nSymbol: {symbol}\nOrderID: {order_id}",
                         loop=_telegram_client.loop if _telegram_client else None
@@ -1180,7 +1180,7 @@ async def monitor_entry_order(
 
             # Handle cancellation
             elif status in ("CANCELED", "EXPIRED", "REJECTED"):
-                log.info(f"[Monitor] Order {order_id} status {status}, stopping monitor")
+                log.info(f"Order {order_id} status {status}, stopping monitor")
                 try:
                     clear_closed_trade(order_id)
                 except Exception as e:
@@ -1190,7 +1190,7 @@ async def monitor_entry_order(
             # Check timeout
             elapsed = time.time() - start_time
             if elapsed >= timeout_seconds and status != "FILLED":
-                log.info(f"[Monitor] Timeout ({timeout_seconds}s), cancelling order {order_id}...")
+                log.info(f"Timeout ({timeout_seconds}s), cancelling order {order_id}...")
 
                 try:
                     binance_client.rest_api.cancel_order(symbol=symbol, order_id=order_id)
@@ -1225,7 +1225,7 @@ async def monitor_position_closes(poll_interval: int = 60) -> None:
     Args:
         poll_interval: Check interval in seconds
     """
-    log.info(f"[PositionMonitor] Started, polling every {poll_interval}s")
+    log.info(f"Started, polling every {poll_interval}s")
 
     while True:
         await asyncio.sleep(poll_interval)
@@ -1255,7 +1255,7 @@ async def monitor_position_closes(poll_interval: int = 60) -> None:
                 pos_amt = get_position_amount(symbol, position_side)
 
                 if pos_amt == 0:
-                    log.info(f"[PositionMonitor] Position closed: {symbol}/{position_side}")
+                    log.info(f"Position closed: {symbol}/{position_side}")
 
                     _log_closed_trade(entry_id, record, symbol)
                     clear_closed_trade(entry_id)
@@ -1266,7 +1266,7 @@ async def monitor_position_closes(poll_interval: int = 60) -> None:
                     )
 
             except Exception as e:
-                log.error(f"[PositionMonitor] Error processing {key}: {e}")
+                log.error(f"Error processing {key}: {e}")
 
 
 # =============================================================================
@@ -1536,7 +1536,7 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
     positions = get_open_positions()
 
     if RECONCILE_VERBOSE:
-        log.info(f"[Reconcile] Non-zero positions: {sorted(list(positions))}")
+        log.info(f"Non-zero positions: {sorted(list(positions))}")
 
     for order in open_orders:
         try:
@@ -1553,16 +1553,16 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
 
             if RECONCILE_VERBOSE:
                 try:
-                    log.info(f"[Reconcile] Order: {json.dumps(order, ensure_ascii=False)}")
+                    log.info(f"Order: {json.dumps(order, ensure_ascii=False)}")
                 except Exception:
-                    log.info(f"[Reconcile] Order: {order}")
+                    log.info(f"Order: {order}")
 
             # Handle orphan exit orders
             if is_exit:
                 pos_amt = get_position_amount(symbol, pos_side)
 
                 if RECONCILE_VERBOSE:
-                    log.info(f"[Reconcile] Position ({symbol}, {pos_side}): {pos_amt}")
+                    log.info(f"Position ({symbol}, {pos_side}): {pos_amt}")
 
                 if abs(pos_amt) == Decimal("0") or (symbol, pos_side) not in positions:
                     # Try to log the trade first
@@ -1576,13 +1576,13 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
                         if rec_symbol == symbol and rec_side == pos_side:
                             if order_id in (rec_sl_id, rec_tp_id):
                                 entry_id = record.get("entry_order_id") or key
-                                log.info(f"[Reconcile] Found trade for orphan order {order_id}")
+                                log.info(f"Found trade for orphan order {order_id}")
                                 try:
                                     _log_closed_trade(entry_id, record, symbol)
                                     clear_closed_trade(entry_id)
                                     logged = True
                                 except Exception as e:
-                                    log.error(f"[Reconcile] Failed to log trade: {e}")
+                                    log.error(f"Failed to log trade: {e}")
                                 break
 
                     if cancel_order(symbol, order_id):
@@ -1618,7 +1618,7 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
                         clear_closed_trade(order_id)
                     except Exception as e:
                         if RECONCILE_VERBOSE:
-                            log.error(f"[Reconcile] Failed to clear state: {e}")
+                            log.error(f"Failed to clear state: {e}")
 
                     _notify_user(
                         f"Cancelled stale order\n"
@@ -1630,10 +1630,10 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
 
         except Exception as e:
             if RECONCILE_VERBOSE:
-                log.error(f"[Reconcile] Error processing order: {e}")
+                log.error(f"Error processing order: {e}")
 
     log.info(
-        f"[Reconcile] Complete. "
+        f"Complete. "
         f"Stale entries: {len(summary['stale_entries'])}, "
         f"Orphan exits: {len(summary['orphan_exits'])}"
     )
@@ -1791,7 +1791,7 @@ async def daily_pnl_notifier(tz_name: str = "Asia/Taipei", hour: int = 12, minut
             next_run += timedelta(days=1)
 
         wait_seconds = (next_run - now).total_seconds()
-        log.info(f"[PnL Notifier] Next notification at {next_run.strftime('%Y-%m-%d %H:%M:%S')} ({int(wait_seconds)}s)")
+        log.info(f"Next notification at {next_run.strftime('%Y-%m-%d %H:%M:%S')} ({int(wait_seconds)}s)")
 
         await asyncio.sleep(wait_seconds)
 
