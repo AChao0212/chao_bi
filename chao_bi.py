@@ -20,6 +20,7 @@ from config import (
     USE_PY_RISK_MANAGER,
     AUTO_CANCEL_SECONDS,
     ORDER_MONITOR_INTERVAL,
+    RECONCILE_INTERVAL,
 )
 from state_store import register_entry_trade, load_state
 from llm import parse_signal_with_llm
@@ -259,6 +260,15 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
     if not binance_api.is_valid_symbol(symbol):
         log.error(f"Invalid symbol: {symbol}")
         notify_user(f"Trade rejected: Invalid symbol {symbol}", loop=event_loop)
+        return
+
+    # Check for duplicate position or pending order
+    position_side = "LONG" if action == "BUY" else "SHORT"
+    has_duplicate, reason = binance_api.has_existing_position_or_order(symbol, position_side)
+    if has_duplicate:
+        log.warning(f"Duplicate order prevented: {reason}")
+        notify_user(f"Trade skipped: {reason}", loop=event_loop)
+        log.info("=" * 30)
         return
 
     log.info(f"Symbol: {symbol}")
@@ -514,13 +524,13 @@ async def handle_message(event) -> None:
 # BACKGROUND TASKS
 # =============================================================================
 
-async def periodic_reconcile_task(loop: asyncio.AbstractEventLoop, interval_sec: int = 600) -> None:
+async def periodic_reconcile_task(loop: asyncio.AbstractEventLoop, interval_sec: int = RECONCILE_INTERVAL) -> None:
     """
     Periodically run reconciliation and state cleanup.
 
     Args:
         loop: Event loop
-        interval_sec: Interval between runs
+        interval_sec: Interval between runs (default from config.RECONCILE_INTERVAL)
     """
     while True:
         try:
@@ -533,6 +543,13 @@ async def periodic_reconcile_task(loop: asyncio.AbstractEventLoop, interval_sec:
             await loop.run_in_executor(None, binance_api.resume_tracked_trades, loop)
         except Exception as e:
             log.error(f"State cleanup failed: {e}")
+
+        try:
+            synced = await loop.run_in_executor(None, binance_api.sync_external_positions)
+            if synced > 0:
+                log.info(f"Synced {synced} external position(s)")
+        except Exception as e:
+            log.error(f"External position sync failed: {e}")
 
         await asyncio.sleep(interval_sec)
 
@@ -569,7 +586,7 @@ async def main() -> None:
         log.error(f"Failed to register handler: {e}")
 
     # Start background tasks
-    asyncio.create_task(periodic_reconcile_task(loop, 600))
+    asyncio.create_task(periodic_reconcile_task(loop))
     asyncio.create_task(binance_api.daily_pnl_notifier("Asia/Taipei", 0, 0))
     asyncio.create_task(binance_api.monitor_position_closes(poll_interval=60))
 

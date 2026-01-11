@@ -475,6 +475,111 @@ def get_open_positions() -> set[tuple[str, str]]:
     return positions
 
 
+def has_existing_position_or_order(symbol: str, position_side: str) -> tuple[bool, str]:
+    """
+    Check if there's already an existing position or pending order for the symbol and direction.
+
+    This prevents duplicate orders when:
+    - User manually placed an order via Binance app
+    - Bot already has a pending order
+
+    Args:
+        symbol: Trading pair
+        position_side: 'LONG' or 'SHORT'
+
+    Returns:
+        Tuple of (has_duplicate, reason)
+    """
+    position_side = position_side.upper()
+
+    # Check for existing position
+    pos_amt = get_position_amount(symbol, position_side)
+    if pos_amt != 0:
+        return (True, f"Already have {position_side} position on {symbol} (qty={pos_amt})")
+
+    # Check for pending orders in same direction
+    open_orders = get_open_orders(symbol)
+    for order in open_orders:
+        order_side = (order.get("positionSide") or order.get("position_side") or "").upper()
+        order_type = (order.get("type") or "").upper()
+
+        # Skip exit orders (SL/TP)
+        if order_type in ("STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"):
+            continue
+
+        # Check if it's an entry order in same direction
+        if order_side == position_side:
+            order_id = order.get("orderId") or order.get("order_id")
+            return (True, f"Already have pending {position_side} order on {symbol} (ID={order_id})")
+
+    return (False, "")
+
+
+def sync_external_positions() -> int:
+    """
+    Sync positions that were opened externally (via Binance app) to our state.
+
+    This allows tracking and logging trades even if they weren't placed by the bot.
+
+    Returns:
+        Number of positions synced
+    """
+    from state_store import register_entry_trade, iter_tracked_trades
+
+    synced = 0
+    positions = get_open_positions()
+
+    # Get symbols already tracked
+    tracked_symbols = set()
+    for key, record in iter_tracked_trades():
+        symbol = record.get("symbol")
+        side = (record.get("position_side") or "").upper()
+        if symbol and side:
+            tracked_symbols.add((symbol, side))
+
+    # Find positions not in our state
+    for symbol, position_side in positions:
+        if (symbol, position_side) in tracked_symbols:
+            continue
+
+        # Get position details
+        pos_amt = get_position_amount(symbol, position_side)
+        if pos_amt == 0:
+            continue
+
+        # Get current price as entry price estimate
+        market_price = get_market_price(symbol)
+        if not market_price:
+            continue
+
+        log.info(f"Found external position: {symbol} {position_side} qty={pos_amt}")
+
+        # Register with a fake order ID (negative timestamp to distinguish)
+        import time
+        fake_order_id = -int(time.time() * 1000)
+
+        try:
+            register_entry_trade(
+                symbol=symbol,
+                position_side=position_side,
+                order_type="EXTERNAL",
+                entry_price=market_price,
+                quantity=str(abs(pos_amt)),
+                leverage=0,  # Unknown
+                stop_loss="",
+                take_profit="",
+                entry_order_id=fake_order_id,
+                channel_title="External (Binance App)",
+                raw_signal="Position opened externally",
+            )
+            synced += 1
+            log.info(f"Synced external position: {symbol} {position_side}")
+        except Exception as e:
+            log.error(f"Failed to sync external position {symbol}: {e}")
+
+    return synced
+
+
 # =============================================================================
 # 6. ORDER MANAGEMENT FUNCTIONS
 # =============================================================================

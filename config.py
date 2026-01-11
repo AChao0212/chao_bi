@@ -93,3 +93,5 @@ AUTO_CANCEL_SECONDS = 12 * 60 * 60
 ORDER_MONITOR_INTERVAL = 30
 # Reconcile 診斷輸出（True=詳細列印每個 symbol 的錯誤；False=靜默）
 RECONCILE_VERBOSE = True
+# Reconcile 間隔（秒）- 3-5分鐘不會觸發 Binance 限流
+RECONCILE_INTERVAL = 3 * 60  # 3 minutes
