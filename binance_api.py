@@ -57,13 +57,37 @@ from binance_common.constants import DERIVATIVES_TRADING_USDS_FUTURES_REST_API_P
 from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
     DerivativesTradingUsdsFutures,
 )
-from binance_common.exceptions import ClientError
+from binance_common.errors import ClientError
 
 # Timezone support
 try:
     from zoneinfo import ZoneInfo
 except ImportError:
     ZoneInfo = None
+
+
+def _to_dict(obj) -> dict:
+    """
+    Convert SDK response object to dictionary.
+
+    The new Binance SDK returns typed response objects instead of dicts.
+    This helper converts them to dicts for consistent access.
+    """
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, list):
+        return {"_list": obj}
+    # Try to convert object to dict
+    if hasattr(obj, "__dict__"):
+        return vars(obj)
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    # Try model_dump for pydantic models
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return {}
 
 # =============================================================================
 # 2. GLOBAL STATE
@@ -137,8 +161,8 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
 
         # Get account balance
         resp = client.rest_api.account_information_v3()
-        account_info = resp.data()
-        total_available_margin = float(account_info.get("availableBalance", 0))
+        account_info = _to_dict(resp.data())
+        total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
 
         if total_available_margin <= 0:
             log.error("Total available margin is 0")
@@ -160,9 +184,12 @@ def _ensure_hedge_mode(client: DerivativesTradingUsdsFutures) -> None:
     """Ensure the account is in hedge mode (dual position side)."""
     try:
         resp = client.rest_api.get_current_position_mode()
-        mode = resp.data()
+        mode = _to_dict(resp.data())
 
-        if mode.get("dualSidePosition") is False:
+        # Check for both camelCase and snake_case field names
+        dual_side = mode.get("dualSidePosition") or mode.get("dual_side_position")
+
+        if dual_side is False:
             log.info("Switching to hedge mode...")
             client.rest_api.change_position_mode(dual_side_position=True)
             log.info("Successfully switched to hedge mode")
@@ -203,11 +230,14 @@ def get_symbol_info(symbol: str) -> Optional[dict]:
     try:
         log.info("Fetching exchange information...")
         resp = binance_client.rest_api.exchange_information()
-        info = resp.data()
+        info = _to_dict(resp.data())
 
-        # Cache all symbols
-        for item in info.get("symbols", []):
-            _symbol_info_cache[item["symbol"]] = item
+        # Cache all symbols - handle both dict and list responses
+        symbols_list = info.get("symbols") or info.get("_list") or []
+        for item in symbols_list:
+            item_dict = _to_dict(item)
+            if "symbol" in item_dict:
+                _symbol_info_cache[item_dict["symbol"]] = item_dict
 
         return _symbol_info_cache.get(symbol)
 
@@ -236,7 +266,7 @@ def get_market_price(symbol: str) -> Optional[str]:
 
     try:
         resp = binance_client.rest_api.symbol_price_ticker(symbol=symbol)
-        ticker = resp.data()
+        ticker = _to_dict(resp.data())
         return ticker.get("price")
     except ClientError as e:
         log.error(f"Failed to get price for {symbol}: {e}")
@@ -260,14 +290,21 @@ def get_klines(symbol: str, interval: str = "5m", limit: int = 200) -> list[dict
 
     try:
         resp = binance_client.rest_api.klines(symbol=symbol, interval=interval, limit=limit)
-        raw_klines = resp.data()
+        raw_data = resp.data()
+
+        # Handle response - could be list directly or wrapped in dict
+        if isinstance(raw_data, list):
+            raw_klines = raw_data
+        else:
+            temp = _to_dict(raw_data)
+            raw_klines = temp.get("_list") or []
 
         return [
             {
-                "open": Decimal(k[1]),
-                "high": Decimal(k[2]),
-                "low": Decimal(k[3]),
-                "close": Decimal(k[4]),
+                "open": Decimal(str(k[1])),
+                "high": Decimal(str(k[2])),
+                "low": Decimal(str(k[3])),
+                "close": Decimal(str(k[4])),
             }
             for k in raw_klines
         ]
@@ -317,7 +354,7 @@ def get_account_info() -> Optional[dict]:
 
     try:
         resp = binance_client.rest_api.account_information_v3()
-        return resp.data()
+        return _to_dict(resp.data())
     except Exception as e:
         log.error(f"Failed to get account info: {e}")
         return None
@@ -339,10 +376,15 @@ def get_position_amount(symbol: str, position_side: str) -> Decimal:
         if not account:
             return Decimal("0")
 
-        for pos in account.get("positions", []):
-            if pos.get("symbol") == symbol:
-                if (pos.get("positionSide") or "").upper() == position_side.upper():
-                    return Decimal(pos.get("positionAmt", "0"))
+        positions = account.get("positions") or []
+        for pos in positions:
+            pos_dict = _to_dict(pos) if not isinstance(pos, dict) else pos
+            pos_symbol = pos_dict.get("symbol")
+            pos_side = (pos_dict.get("positionSide") or pos_dict.get("position_side") or "").upper()
+            pos_amt = pos_dict.get("positionAmt") or pos_dict.get("position_amt") or "0"
+
+            if pos_symbol == symbol and pos_side == position_side.upper():
+                return Decimal(str(pos_amt))
 
         return Decimal("0")
     except Exception as e:
@@ -364,13 +406,17 @@ def get_open_positions() -> set[tuple[str, str]]:
         if not account:
             return positions
 
-        for pos in account.get("positions", []):
-            symbol = pos.get("symbol")
-            amt = Decimal(pos.get("positionAmt", "0"))
-            side = pos.get("positionSide") or ("LONG" if amt > 0 else "SHORT" if amt < 0 else None)
+        pos_list = account.get("positions") or []
+        for pos in pos_list:
+            pos_dict = _to_dict(pos) if not isinstance(pos, dict) else pos
+            symbol = pos_dict.get("symbol")
+            amt_str = pos_dict.get("positionAmt") or pos_dict.get("position_amt") or "0"
+            amt = Decimal(str(amt_str))
+            side = (pos_dict.get("positionSide") or pos_dict.get("position_side") or
+                    ("LONG" if amt > 0 else "SHORT" if amt < 0 else None))
 
             if symbol and amt != 0 and side:
-                positions.add((symbol, side))
+                positions.add((symbol, side.upper()))
 
     except Exception as e:
         log.error(f"Failed to get open positions: {e}")
@@ -409,7 +455,7 @@ def query_order(
             params["orig_client_order_id"] = client_order_id
 
         resp = binance_client.rest_api.query_order(**params)
-        return resp.data()
+        return _to_dict(resp.data())
     except ClientError as e:
         log.error(f"Failed to query order: {e}")
         return None
@@ -434,8 +480,15 @@ def get_open_orders(symbol: Optional[str] = None) -> list[dict]:
             params["symbol"] = symbol
 
         resp = binance_client.rest_api.current_all_open_orders(**params)
-        orders = resp.data()
-        return orders if isinstance(orders, list) else []
+        raw_data = resp.data()
+
+        # Handle response - could be list directly or wrapped
+        if isinstance(raw_data, list):
+            return [_to_dict(o) if not isinstance(o, dict) else o for o in raw_data]
+        else:
+            temp = _to_dict(raw_data)
+            orders = temp.get("_list") or []
+            return [_to_dict(o) if not isinstance(o, dict) else o for o in orders]
     except Exception as e:
         log.error(f"Failed to get open orders: {e}")
         return []
@@ -482,7 +535,7 @@ def place_order(**params) -> Optional[dict]:
 
     try:
         resp = binance_client.rest_api.new_order(**params)
-        return resp.data()
+        return _to_dict(resp.data())
     except ClientError as e:
         log.error(f"Failed to place order: {e}")
         return None
@@ -509,7 +562,15 @@ def get_user_trades(symbol: str, order_id: Optional[int] = None, limit: int = 50
             params["order_id"] = order_id
 
         resp = binance_client.rest_api.account_trade_list(**params)
-        return resp.data()
+        raw_data = resp.data()
+
+        # Handle response - could be list directly or wrapped
+        if isinstance(raw_data, list):
+            return [_to_dict(t) if not isinstance(t, dict) else t for t in raw_data]
+        else:
+            temp = _to_dict(raw_data)
+            trades = temp.get("_list") or []
+            return [_to_dict(t) if not isinstance(t, dict) else t for t in trades]
     except Exception as e:
         log.error(f"Failed to get user trades: {e}")
         return []
@@ -534,14 +595,24 @@ def get_max_leverage(symbol: str) -> int:
 
     try:
         resp = binance_client.rest_api.notional_and_leverage_brackets(symbol=symbol)
-        data = resp.data()
+        raw_data = resp.data()
 
-        if isinstance(data, list) and len(data) > 0:
-            brackets = data[0].get("brackets", [])
-            max_lev = max(
-                (int(b.get("initialLeverage", 0)) for b in brackets),
-                default=0
-            )
+        # Handle response - could be list directly or wrapped
+        if isinstance(raw_data, list):
+            data = raw_data
+        else:
+            temp = _to_dict(raw_data)
+            data = temp.get("_list") or [temp] if temp else []
+
+        if data and len(data) > 0:
+            first_item = _to_dict(data[0]) if not isinstance(data[0], dict) else data[0]
+            brackets = first_item.get("brackets") or []
+            max_lev = 0
+            for b in brackets:
+                b_dict = _to_dict(b) if not isinstance(b, dict) else b
+                lev = int(b_dict.get("initialLeverage") or b_dict.get("initial_leverage") or 0)
+                if lev > max_lev:
+                    max_lev = lev
             if max_lev > 0:
                 return max_lev
 
@@ -961,14 +1032,14 @@ def attach_exit_orders(
     try:
         log.info("Placing SL order (STOP_MARKET, closePosition=true)...")
         sl_resp = binance_client.rest_api.new_order(**sl_params)
-        sl_data = sl_resp.data()
-        sl_id = sl_data.get("orderId")
+        sl_data = _to_dict(sl_resp.data())
+        sl_id = sl_data.get("orderId") or sl_data.get("order_id")
         log.info(f"SL order placed (ID: {sl_id})")
 
         log.info("Placing TP order (TAKE_PROFIT_MARKET, closePosition=true)...")
         tp_resp = binance_client.rest_api.new_order(**tp_params)
-        tp_data = tp_resp.data()
-        tp_id = tp_data.get("orderId")
+        tp_data = _to_dict(tp_resp.data())
+        tp_id = tp_data.get("orderId") or tp_data.get("order_id")
         log.info(f"TP order placed (ID: {tp_id})")
 
         # Update state
@@ -1547,8 +1618,15 @@ def _get_income_records(start_ms: int, end_ms: int, limit: int = 1000) -> list[d
             end_time=int(end_ms),
             limit=int(limit)
         )
-        records = resp.data()
-        return records if isinstance(records, list) else []
+        raw_data = resp.data()
+
+        # Handle response - could be list directly or wrapped
+        if isinstance(raw_data, list):
+            return [_to_dict(r) if not isinstance(r, dict) else r for r in raw_data]
+        else:
+            temp = _to_dict(raw_data)
+            records = temp.get("_list") or []
+            return [_to_dict(r) if not isinstance(r, dict) else r for r in records]
     except Exception as e:
         log.error(f"Failed to get income records: {e}")
         return []

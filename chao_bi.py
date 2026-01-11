@@ -108,33 +108,41 @@ def compute_order_parameters(
     """
     # Get exchange rules
     resp = binance_api.binance_client.rest_api.exchange_information()
-    info = resp.data()
-    symbol_info = next((s for s in info["symbols"] if s["symbol"] == symbol), None)
+    info = binance_api._to_dict(resp.data())
+    symbols_list = info.get("symbols") or []
+    symbol_info = None
+    for s in symbols_list:
+        s_dict = binance_api._to_dict(s) if not isinstance(s, dict) else s
+        if s_dict.get("symbol") == symbol:
+            symbol_info = s_dict
+            break
 
     if not symbol_info:
         raise RuntimeError(f"Symbol {symbol} not found in exchange info")
 
     # Extract filters
-    price_filter = next(
-        (f for f in symbol_info["filters"] if f["filterType"] == "PRICE_FILTER"),
-        None
-    )
-    lot_filter = next(
-        (f for f in symbol_info["filters"] if f["filterType"] == "LOT_SIZE"),
-        None
-    )
-    min_notional_filter = next(
-        (f for f in symbol_info["filters"] if f.get("filterType") == "MIN_NOTIONAL"),
-        None
-    )
+    filters = symbol_info.get("filters") or []
+    price_filter = None
+    lot_filter = None
+    min_notional_filter = None
+
+    for f in filters:
+        f_dict = binance_api._to_dict(f) if not isinstance(f, dict) else f
+        filter_type = f_dict.get("filterType") or f_dict.get("filter_type")
+        if filter_type == "PRICE_FILTER":
+            price_filter = f_dict
+        elif filter_type == "LOT_SIZE":
+            lot_filter = f_dict
+        elif filter_type == "MIN_NOTIONAL":
+            min_notional_filter = f_dict
 
     if not price_filter or not lot_filter:
         raise RuntimeError("Missing PRICE_FILTER or LOT_SIZE filter")
 
-    price_precision = price_filter["tickSize"]
-    quantity_precision = lot_filter["stepSize"]
-    min_qty = Decimal(lot_filter.get("minQty", "0"))
-    min_notional = Decimal(min_notional_filter.get("notional", "0")) if min_notional_filter else Decimal("0")
+    price_precision = price_filter.get("tickSize") or price_filter.get("tick_size") or "0.00000001"
+    quantity_precision = lot_filter.get("stepSize") or lot_filter.get("step_size") or "0.001"
+    min_qty = Decimal(lot_filter.get("minQty") or lot_filter.get("min_qty") or "0")
+    min_notional = Decimal(min_notional_filter.get("notional") or "0") if min_notional_filter else Decimal("0")
 
     # Get reference price
     if entry_price_str:
@@ -308,8 +316,8 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
     try:
         log.info("Placing entry order...")
         resp = binance_api.binance_client.rest_api.new_order(**order_params)
-        entry_resp = resp.data()
-        order_id = entry_resp.get("orderId")
+        entry_resp = binance_api._to_dict(resp.data())
+        order_id = entry_resp.get("orderId") or entry_resp.get("order_id")
         status = entry_resp.get("status")
         log.info(f"Order placed. Status: {status}, ID: {order_id}")
 
