@@ -161,8 +161,23 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
 
         # Get account balance
         resp = client.rest_api.account_information_v3()
-        account_info = _to_dict(resp.data())
-        total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
+        raw_data = resp.data()
+
+        # Debug: understand the response structure
+        log.info(f"Response type: {type(raw_data).__name__}")
+        log.info(f"Response dir: {[x for x in dir(raw_data) if not x.startswith('_')][:15]}")
+
+        # Try to access availableBalance directly as attribute
+        if hasattr(raw_data, "availableBalance"):
+            total_available_margin = float(raw_data.availableBalance or 0)
+            log.info(f"Got balance via attribute: {total_available_margin}")
+        elif hasattr(raw_data, "available_balance"):
+            total_available_margin = float(raw_data.available_balance or 0)
+            log.info(f"Got balance via snake_case attribute: {total_available_margin}")
+        else:
+            account_info = _to_dict(raw_data)
+            log.info(f"Dict keys: {list(account_info.keys())[:10]}")
+            total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
 
         if total_available_margin <= 0:
             log.error("Total available margin is 0")
@@ -170,6 +185,11 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
 
         log.info("Binance connection successful")
         log.info(f"Available balance: {total_available_margin} USDT")
+
+        # Debug: print available REST API methods
+        api_methods = [m for m in dir(client.rest_api) if not m.startswith('_') and callable(getattr(client.rest_api, m, None))]
+        log.info(f"Available API methods (first 30): {api_methods[:30]}")
+
         return client
 
     except ClientError as e:

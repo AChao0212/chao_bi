@@ -10,6 +10,7 @@ This module provides a centralized logging system with:
 
 import logging
 import sys
+import inspect
 from datetime import datetime
 from typing import Optional, Callable
 from functools import wraps
@@ -136,31 +137,50 @@ class ModuleLogger:
         log.info("Connection established")
         log.error("API call failed")
         log.notify("Order placed", telegram=True)
+
+    Output format: [level] [module] [function]: message
     """
 
     def __init__(self, module_name: str):
         self.logger = get_logger(module_name)
         self.module_name = module_name
 
+    def _get_caller_func(self) -> str:
+        """Get the name of the calling function."""
+        # Go up 3 frames: _get_caller_func -> log method -> actual caller
+        frame = inspect.currentframe()
+        try:
+            caller_frame = frame.f_back.f_back.f_back
+            return caller_frame.f_code.co_name if caller_frame else "unknown"
+        except (AttributeError, TypeError):
+            return "unknown"
+        finally:
+            del frame
+
+    def _format_message(self, message: str) -> str:
+        """Format message with function name."""
+        func_name = self._get_caller_func()
+        return f"[{func_name}]: {message}"
+
     def debug(self, message: str) -> None:
         """Log a debug message."""
-        self.logger.debug(message)
+        self.logger.debug(self._format_message(message))
 
     def info(self, message: str) -> None:
         """Log an info message."""
-        self.logger.info(message)
+        self.logger.info(self._format_message(message))
 
     def warning(self, message: str) -> None:
         """Log a warning message."""
-        self.logger.warning(message)
+        self.logger.warning(self._format_message(message))
 
     def error(self, message: str) -> None:
         """Log an error message."""
-        self.logger.error(message)
+        self.logger.error(self._format_message(message))
 
     def critical(self, message: str) -> None:
         """Log a critical message."""
-        self.logger.critical(message)
+        self.logger.critical(self._format_message(message))
 
     def notify(
         self,
@@ -178,7 +198,7 @@ class ModuleLogger:
             telegram: Whether to send via Telegram (default True)
             event_loop: Event loop for async operations
         """
-        self.logger.log(level, message)
+        self.logger.log(level, self._format_message(message))
         if telegram and _telegram_notifier:
             try:
                 _telegram_notifier(message, loop=event_loop)
