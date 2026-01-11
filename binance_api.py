@@ -373,6 +373,44 @@ def get_account_info() -> Optional[dict]:
         return None
 
 
+def refresh_available_balance() -> float:
+    """
+    Refresh and return the current available balance.
+
+    This should be called before each trade to get the latest balance.
+
+    Returns:
+        Available balance in USDT, or 0 if failed
+    """
+    global total_available_margin
+
+    if binance_client is None:
+        return 0.0
+
+    try:
+        resp = binance_client.rest_api.account_information_v3()
+        raw_data = resp.data()
+
+        # Try to access available_balance directly as attribute
+        if hasattr(raw_data, "available_balance"):
+            total_available_margin = float(raw_data.available_balance or 0)
+        elif hasattr(raw_data, "availableBalance"):
+            total_available_margin = float(raw_data.availableBalance or 0)
+        else:
+            account_info = _to_dict(raw_data)
+            total_available_margin = float(
+                account_info.get("availableBalance") or
+                account_info.get("available_balance") or 0
+            )
+
+        log.info(f"Refreshed balance: {total_available_margin:.2f} USDT")
+        return total_available_margin
+
+    except Exception as e:
+        log.error(f"Failed to refresh balance: {e}")
+        return total_available_margin  # Return last known value
+
+
 def get_position_amount(symbol: str, position_side: str) -> Decimal:
     """
     Get the position amount for a specific symbol and side.

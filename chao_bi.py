@@ -160,12 +160,17 @@ def compute_order_parameters(
     if sl_dec is None or tp_dec is None:
         raise RuntimeError("Missing SL or TP")
 
+    # Refresh available balance before calculation
+    available_balance = binance_api.refresh_available_balance()
+    if available_balance <= 0:
+        raise RuntimeError("No available balance")
+
     # Calculate quantity based on risk
     sl_distance = abs(ref_price - sl_dec)
     if sl_distance == 0:
         raise RuntimeError("SL distance is zero")
 
-    risk_amount = Decimal(str(binance_api.total_available_margin)) * Decimal("0.01")
+    risk_amount = Decimal(str(available_balance)) * Decimal("0.01")
     quantity = (risk_amount * Decimal(str(leverage))) / sl_distance
 
     # Ensure minimum notional
@@ -178,7 +183,7 @@ def compute_order_parameters(
             quantity = min_qty_for_notional
 
     # Cap by margin limit
-    max_margin = Decimal(str(binance_api.total_available_margin)) * Decimal(str(MAX_INITIAL_MARGIN_PCT))
+    max_margin = Decimal(str(available_balance)) * Decimal(str(MAX_INITIAL_MARGIN_PCT))
     original_qty = quantity
     quantity = binance_api.cap_quantity_by_margin(
         ref_price,
@@ -196,7 +201,7 @@ def compute_order_parameters(
         min_balance_required = min_margin_required / Decimal(str(MAX_INITIAL_MARGIN_PCT))
         raise RuntimeError(
             f"Insufficient balance. Need ~{min_balance_required:.2f} USDT for {symbol} "
-            f"(min_qty={min_qty}, current balance={binance_api.total_available_margin:.2f})"
+            f"(min_qty={min_qty}, current balance={available_balance:.2f})"
         )
 
     # Format values
