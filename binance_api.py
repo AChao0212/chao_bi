@@ -189,6 +189,11 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
         # Debug: print available REST API methods
         api_methods = [m for m in dir(client.rest_api) if not m.startswith('_') and callable(getattr(client.rest_api, m, None))]
         log.info(f"Available API methods (first 30): {api_methods[:30]}")
+        # Find kline and leverage related methods
+        kline_methods = [m for m in api_methods if 'kline' in m.lower()]
+        leverage_methods = [m for m in api_methods if 'leverage' in m.lower()]
+        log.info(f"Kline methods: {kline_methods}")
+        log.info(f"Leverage methods: {leverage_methods}")
 
         return client
 
@@ -309,7 +314,8 @@ def get_klines(symbol: str, interval: str = "5m", limit: int = 200) -> list[dict
         return []
 
     try:
-        resp = binance_client.rest_api.klines(symbol=symbol, interval=interval, limit=limit)
+        # New SDK uses kline_candlestick_data instead of klines
+        resp = binance_client.rest_api.kline_candlestick_data(symbol=symbol, interval=interval, limit=limit)
         raw_data = resp.data()
 
         # Handle response - could be list directly or wrapped in dict
@@ -330,6 +336,9 @@ def get_klines(symbol: str, interval: str = "5m", limit: int = 200) -> list[dict
         ]
     except ClientError as e:
         log.error(f"Failed to get klines for {symbol}: {e}")
+        return []
+    except AttributeError as e:
+        log.error(f"Kline method not found: {e}")
         return []
 
 
@@ -617,27 +626,39 @@ def get_max_leverage(symbol: str) -> int:
         resp = binance_client.rest_api.notional_and_leverage_brackets(symbol=symbol)
         raw_data = resp.data()
 
+        # Debug: understand response structure
+        log.info(f"Leverage brackets response type: {type(raw_data).__name__}")
+
         # Handle response - could be list directly or wrapped
         if isinstance(raw_data, list):
             data = raw_data
         else:
             temp = _to_dict(raw_data)
+            log.info(f"Leverage brackets keys: {list(temp.keys())[:10]}")
             data = temp.get("_list") or [temp] if temp else []
 
         if data and len(data) > 0:
             first_item = _to_dict(data[0]) if not isinstance(data[0], dict) else data[0]
+            log.info(f"First bracket item keys: {list(first_item.keys())}")
             brackets = first_item.get("brackets") or []
+
+            # If brackets is empty, try to access as attribute
+            if not brackets and hasattr(data[0], "brackets"):
+                brackets = data[0].brackets or []
+
             max_lev = 0
             for b in brackets:
                 b_dict = _to_dict(b) if not isinstance(b, dict) else b
                 lev = int(b_dict.get("initialLeverage") or b_dict.get("initial_leverage") or 0)
                 if lev > max_lev:
                     max_lev = lev
+
+            log.info(f"Max leverage found for {symbol}: {max_lev}")
             if max_lev > 0:
                 return max_lev
 
-    except Exception:
-        log.error(f"Failed to get max leverage for {symbol}, using default")
+    except Exception as e:
+        log.error(f"Failed to get max leverage for {symbol}: {e}, using default")
 
     return int(DEFAULT_LEVERAGE)
 
