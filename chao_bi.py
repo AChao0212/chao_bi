@@ -142,7 +142,13 @@ def compute_order_parameters(
     price_precision = price_filter.get("tickSize") or price_filter.get("tick_size") or "0.00000001"
     quantity_precision = lot_filter.get("stepSize") or lot_filter.get("step_size") or "0.001"
     min_qty = Decimal(lot_filter.get("minQty") or lot_filter.get("min_qty") or "0")
-    min_notional = Decimal(min_notional_filter.get("notional") or "0") if min_notional_filter else Decimal("0")
+
+    # Get min notional from filter, default to 100 USDT (Binance futures minimum)
+    min_notional = Decimal("100")  # Default minimum for USDS-M futures
+    if min_notional_filter:
+        filter_notional = Decimal(min_notional_filter.get("notional") or min_notional_filter.get("minNotional") or "0")
+        if filter_notional > 0:
+            min_notional = max(filter_notional, Decimal("100"))  # At least 100 USDT
 
     # Get reference price
     if entry_price_str:
@@ -173,14 +179,18 @@ def compute_order_parameters(
     risk_amount = Decimal(str(available_balance)) * Decimal("0.01")
     quantity = (risk_amount * Decimal(str(leverage))) / sl_distance
 
+    # Calculate minimum quantity for notional requirement (100 USDT min for futures)
+    min_qty_for_notional = (min_notional / ref_price).quantize(
+        Decimal(quantity_precision),
+        rounding=ROUND_UP
+    )
+
+    # Use the higher of LOT_SIZE min_qty and notional min_qty
+    effective_min_qty = max(min_qty, min_qty_for_notional)
+
     # Ensure minimum notional
-    if min_notional > 0:
-        min_qty_for_notional = (min_notional / ref_price).quantize(
-            Decimal(quantity_precision),
-            rounding=ROUND_UP
-        )
-        if quantity < min_qty_for_notional:
-            quantity = min_qty_for_notional
+    if quantity < effective_min_qty:
+        quantity = effective_min_qty
 
     # Cap by margin limit
     max_margin = Decimal(str(available_balance)) * Decimal(str(MAX_INITIAL_MARGIN_PCT))
@@ -191,17 +201,17 @@ def compute_order_parameters(
         quantity,
         max_margin,
         Decimal(quantity_precision),
-        min_qty
+        effective_min_qty  # Use effective min qty (includes notional requirement)
     )
 
     if quantity <= 0:
         # Calculate minimum required balance for this trade
-        min_notional_value = min_qty * ref_price
+        min_notional_value = effective_min_qty * ref_price
         min_margin_required = min_notional_value / Decimal(str(leverage))
         min_balance_required = min_margin_required / Decimal(str(MAX_INITIAL_MARGIN_PCT))
         raise RuntimeError(
             f"Insufficient balance. Need ~{min_balance_required:.2f} USDT for {symbol} "
-            f"(min_qty={min_qty}, current balance={available_balance:.2f})"
+            f"(min_notional={min_notional}, min_qty={effective_min_qty}, balance={available_balance:.2f})"
         )
 
     # Format values
@@ -481,7 +491,7 @@ async def handle_message(event) -> None:
             return
 
         chat = await event.get_chat()
-        channel_title = getattr(chat, "title", None) or getattr(chat, "username", "DM")
+        channel_title = getattr(chat, "title", None) or getattr(chat, "username", None)
         message_text = message.text.strip()
 
         # Skip messages that look like bot notifications
