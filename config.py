@@ -75,7 +75,7 @@ LEVERAGE_OVERRIDES = {
 }
 
 # 風控補強：初始保證金上限與 TP 計算的 RR 參數
-MAX_INITIAL_MARGIN_PCT = 0.03  # 每筆訂單的初始保證金上限（占可用餘額的比例），例：3%
+MAX_INITIAL_MARGIN_PCT = 0.06  # 每筆訂單的初始保證金上限（占可用餘額的比例），例：3%
 RR_DEFAULT = Decimal('2.5')    # 預設 RR 倍數（TP = entry ± 1.5 * distance）
 RR_MAX = Decimal('3.0')        # 允許 LLM 給的 TP 與預設值距離差的上限倍數
 

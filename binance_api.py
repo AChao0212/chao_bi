@@ -273,13 +273,41 @@ def get_market_price(symbol: str) -> Optional[str]:
     if binance_client is None:
         return None
 
+    # Try symbol_price_ticker first
     try:
         resp = binance_client.rest_api.symbol_price_ticker(symbol=symbol)
-        ticker = _to_dict(resp.data())
-        return ticker.get("price")
-    except ClientError as e:
-        log.error(f"Failed to get price for {symbol}: {e}")
-        return None
+        raw_data = resp.data()
+        ticker = _to_dict(raw_data)
+        price = ticker.get("price")
+        if price:
+            return price
+    except Exception as e:
+        log.warning(f"symbol_price_ticker failed for {symbol}: {e}")
+
+    # Fallback: try mark_price
+    try:
+        resp = binance_client.rest_api.mark_price(symbol=symbol)
+        raw_data = resp.data()
+        mark_data = _to_dict(raw_data)
+        price = mark_data.get("markPrice") or mark_data.get("mark_price")
+        if price:
+            return price
+    except Exception as e:
+        log.warning(f"mark_price failed for {symbol}: {e}")
+
+    # Fallback: try ticker_24hr_price_change
+    try:
+        resp = binance_client.rest_api.ticker_24hr_price_change(symbol=symbol)
+        raw_data = resp.data()
+        ticker_data = _to_dict(raw_data)
+        price = ticker_data.get("lastPrice") or ticker_data.get("last_price")
+        if price:
+            return price
+    except Exception as e:
+        log.warning(f"ticker_24hr_price_change failed for {symbol}: {e}")
+
+    log.error(f"All price methods failed for {symbol}")
+    return None
 
 
 def get_klines(symbol: str, interval: str = "5m", limit: int = 200) -> list[dict]:
@@ -1199,23 +1227,23 @@ def attach_exit_orders(
     sl_params = {
         "symbol": symbol,
         "side": close_side,
-        "position_side": position_side,
+        "positionSide": position_side,
         "type": "STOP_MARKET",
-        "stop_price": sl_price,
-        "close_position": "true",
-        "working_type": working_type,
-        "price_protect": "true",
+        "stopPrice": sl_price,
+        "closePosition": "true",
+        "workingType": working_type,
+        "priceProtect": "true",
     }
 
     tp_params = {
         "symbol": symbol,
         "side": close_side,
-        "position_side": position_side,
+        "positionSide": position_side,
         "type": "TAKE_PROFIT_MARKET",
-        "stop_price": tp_price,
-        "close_position": "true",
-        "working_type": working_type,
-        "price_protect": "true",
+        "stopPrice": tp_price,
+        "closePosition": "true",
+        "workingType": working_type,
+        "priceProtect": "true",
     }
 
     try:
