@@ -295,16 +295,16 @@ def get_market_price(symbol: str) -> Optional[str]:
     except Exception as e:
         log.warning(f"mark_price failed for {symbol}: {e}")
 
-    # Fallback: try ticker_24hr_price_change
+    # Fallback: try ticker24hr_price_change_statistics
     try:
-        resp = binance_client.rest_api.ticker_24hr_price_change(symbol=symbol)
+        resp = binance_client.rest_api.ticker24hr_price_change_statistics(symbol=symbol)
         raw_data = resp.data()
         ticker_data = _to_dict(raw_data)
         price = ticker_data.get("lastPrice") or ticker_data.get("last_price")
         if price:
             return price
     except Exception as e:
-        log.warning(f"ticker_24hr_price_change failed for {symbol}: {e}")
+        log.warning(f"ticker24hr_price_change_statistics failed for {symbol}: {e}")
 
     log.error(f"All price methods failed for {symbol}")
     return None
@@ -1224,39 +1224,43 @@ def attach_exit_orders(
 
     close_side = "SELL" if position_side == "LONG" else "BUY"
 
+    # Use new_algo_order for conditional orders (STOP_MARKET, TAKE_PROFIT_MARKET)
+    # Since 2025-12-09, these order types are routed to algo order endpoint
     sl_params = {
+        "algo_type": "CONDITIONAL",
         "symbol": symbol,
         "side": close_side,
-        "positionSide": position_side,
         "type": "STOP_MARKET",
-        "stopPrice": sl_price,
-        "closePosition": "true",
-        "workingType": working_type,
-        "priceProtect": "true",
+        "position_side": position_side,
+        "trigger_price": float(sl_price),
+        "close_position": "true",
+        "working_type": working_type,
+        "price_protect": "true",
     }
 
     tp_params = {
+        "algo_type": "CONDITIONAL",
         "symbol": symbol,
         "side": close_side,
-        "positionSide": position_side,
         "type": "TAKE_PROFIT_MARKET",
-        "stopPrice": tp_price,
-        "closePosition": "true",
-        "workingType": working_type,
-        "priceProtect": "true",
+        "position_side": position_side,
+        "trigger_price": float(tp_price),
+        "close_position": "true",
+        "working_type": working_type,
+        "price_protect": "true",
     }
 
     try:
         log.info("Placing SL order (STOP_MARKET, closePosition=true)...")
-        sl_resp = binance_client.rest_api.new_order(**sl_params)
+        sl_resp = binance_client.rest_api.new_algo_order(**sl_params)
         sl_data = _to_dict(sl_resp.data())
-        sl_id = sl_data.get("orderId") or sl_data.get("order_id")
+        sl_id = sl_data.get("algoId") or sl_data.get("algo_id") or sl_data.get("orderId") or sl_data.get("order_id")
         log.info(f"SL order placed (ID: {sl_id})")
 
         log.info("Placing TP order (TAKE_PROFIT_MARKET, closePosition=true)...")
-        tp_resp = binance_client.rest_api.new_order(**tp_params)
+        tp_resp = binance_client.rest_api.new_algo_order(**tp_params)
         tp_data = _to_dict(tp_resp.data())
-        tp_id = tp_data.get("orderId") or tp_data.get("order_id")
+        tp_id = tp_data.get("algoId") or tp_data.get("algo_id") or tp_data.get("orderId") or tp_data.get("order_id")
         log.info(f"TP order placed (ID: {tp_id})")
 
         # Update state

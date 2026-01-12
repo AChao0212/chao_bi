@@ -335,15 +335,15 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
     order_params = {
         "symbol": symbol,
         "side": action,
-        "positionSide": position_side,
+        "position_side": position_side,
         "type": order_type,
-        "quantity": f_qty,
-        "newOrderRespType": "RESULT",
+        "quantity": float(f_qty),
+        "new_order_resp_type": "RESULT",
     }
 
     if order_type == "LIMIT":
-        order_params["price"] = f_price
-        order_params["timeInForce"] = "GTC"
+        order_params["price"] = float(f_price)
+        order_params["time_in_force"] = "GTC"
 
     # Place order
     try:
