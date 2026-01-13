@@ -37,6 +37,7 @@ from config import (
     RR_DEFAULT,
     RR_MAX,
     MIN_STOP_DISTANCE_PCT,
+    MAX_MARGIN_RISK_PCT,
     ATR_K,
     ATR_PERIOD,
     RECONCILE_VERBOSE,
@@ -84,16 +85,14 @@ def _to_dict(obj) -> dict:
         return obj
     if isinstance(obj, list):
         return {"_list": obj}
-    # Try model_dump for pydantic models first
+    # Check for OneOf wrapper as object attribute FIRST (before model_dump)
+    if hasattr(obj, "actual_instance"):
+        actual = getattr(obj, "actual_instance", None)
+        if actual is not None:
+            return _to_dict(actual)
+    # Try model_dump for pydantic models
     if hasattr(obj, "model_dump"):
-        result = obj.model_dump()
-        # Check if model_dump result has actual_instance (OneOf wrapper)
-        if isinstance(result, dict) and "actual_instance" in result and result["actual_instance"] is not None:
-            return _to_dict(result["actual_instance"])
-        return result
-    # Check for OneOf wrapper as object attribute
-    if hasattr(obj, "actual_instance") and getattr(obj, "actual_instance", None) is not None:
-        return _to_dict(obj.actual_instance)
+        return obj.model_dump()
     if hasattr(obj, "to_dict"):
         return obj.to_dict()
     # Try to convert object to dict via __dict__
@@ -294,7 +293,6 @@ def get_market_price(symbol: str) -> Optional[str]:
         resp = binance_client.rest_api.symbol_price_ticker_v2(symbol=symbol)
         raw_data = resp.data()
         ticker = _to_dict(raw_data)
-        log.info(f"symbol_price_ticker_v2 response: {ticker}")
         price = ticker.get("price")
         if price:
             return str(price)
@@ -941,30 +939,42 @@ def compute_atr(klines: list[dict], period: int = 14) -> Optional[Decimal]:
 def compute_sl_tp(
     symbol: str,
     action: str,
-    entry_price: Decimal
+    entry_price: Decimal,
+    leverage: int = None
 ) -> tuple[Decimal, Decimal]:
     """
-    Compute stop-loss and take-profit prices based on ATR.
+    Compute stop-loss and take-profit prices based on ATR with leverage-aware cap.
 
     Args:
         symbol: Trading pair
         action: 'BUY' or 'SELL'
         entry_price: Entry price
+        leverage: Leverage used (if None, uses symbol's configured leverage)
 
     Returns:
         Tuple of (stop_loss, take_profit) prices
     """
+    # Get leverage if not provided
+    if leverage is None:
+        leverage = LEVERAGE_OVERRIDES.get(symbol, DEFAULT_LEVERAGE)
+
     klines = get_klines(symbol, interval="5m", limit=max(ATR_PERIOD + 20, 60))
     atr = compute_atr(klines, period=ATR_PERIOD)
 
+    # Calculate distance bounds
     min_distance = entry_price * MIN_STOP_DISTANCE_PCT
+    # Max distance based on leverage: ensures SL hit won't exceed MAX_MARGIN_RISK_PCT of margin
+    max_distance = entry_price * MAX_MARGIN_RISK_PCT / Decimal(str(leverage))
 
     if atr is None:
         distance = min_distance
         log.error(f"Cannot compute ATR, using minimum distance: {distance}")
     else:
-        distance = max(atr * ATR_K, min_distance)
-        log.info(f"ATR={atr:.6f}, distance=max(ATR*{ATR_K}, {MIN_STOP_DISTANCE_PCT*100}%)={distance}")
+        # ATR-based distance, but capped by max_distance for margin safety
+        atr_distance = atr * ATR_K
+        distance = max(min(atr_distance, max_distance), min_distance)
+        log.info(f"ATR={atr:.6f}, leverage={leverage}x, "
+                 f"distance={distance:.6f} (min={min_distance:.6f}, max={max_distance:.6f})")
 
     is_buy = action.upper() == "BUY"
 
@@ -975,6 +985,11 @@ def compute_sl_tp(
         sl = entry_price + distance
         tp = entry_price - (RR_DEFAULT * distance)
 
+    # Log margin risk percentage
+    sl_pct = abs(entry_price - sl) / entry_price * 100
+    margin_risk_pct = sl_pct * leverage
+    log.info(f"SL distance={sl_pct:.2f}%, margin risk={margin_risk_pct:.1f}%")
+
     return (sl, tp)
 
 
@@ -983,7 +998,8 @@ def select_sl_tp_with_preference(
     action: str,
     entry_price: Decimal,
     user_sl: Optional[str],
-    user_tp: Optional[str]
+    user_tp: Optional[str],
+    leverage: int = None
 ) -> tuple[Decimal, Decimal, list[str]]:
     """
     Select SL/TP values, preferring user-provided values when valid.
@@ -994,6 +1010,7 @@ def select_sl_tp_with_preference(
         entry_price: Entry price
         user_sl: User-provided stop-loss (or None)
         user_tp: User-provided take-profit (or None)
+        leverage: Leverage used (if None, uses symbol's configured leverage)
 
     Returns:
         Tuple of (stop_loss, take_profit, warnings_list)
@@ -1001,17 +1018,23 @@ def select_sl_tp_with_preference(
     warnings = []
     is_buy = action.upper() == "BUY"
 
-    # Calculate ATR-based minimum distance
+    # Get leverage if not provided
+    if leverage is None:
+        leverage = LEVERAGE_OVERRIDES.get(symbol, DEFAULT_LEVERAGE)
+
+    # Calculate distance bounds
     klines = get_klines(symbol, interval="5m", limit=max(ATR_PERIOD + 20, 60))
     atr = compute_atr(klines, period=ATR_PERIOD)
     min_distance = entry_price * MIN_STOP_DISTANCE_PCT
+    # Max distance based on leverage: ensures SL hit won't exceed MAX_MARGIN_RISK_PCT of margin
+    max_distance = entry_price * MAX_MARGIN_RISK_PCT / Decimal(str(leverage))
 
     if atr is None:
         distance_floor = min_distance
         log.error(f"Cannot compute ATR, using min distance: {distance_floor}")
     else:
         distance_floor = max(atr * ATR_K, min_distance)
-        log.info(f"ATR={atr:.6f}, min distance={distance_floor}")
+        log.info(f"ATR={atr:.6f}, leverage={leverage}x, distance bounds: min={min_distance:.6f}, max={max_distance:.6f}")
 
     # Validate user SL
     use_user_sl = False
@@ -1020,25 +1043,38 @@ def select_sl_tp_with_preference(
             sl_val = Decimal(str(user_sl))
             sl_distance = abs(entry_price - sl_val)
 
-            # Check direction and minimum distance
-            if is_buy and sl_val < entry_price and sl_distance >= distance_floor:
-                use_user_sl = True
-            elif not is_buy and sl_val > entry_price and sl_distance >= distance_floor:
-                use_user_sl = True
-            elif sl_distance < distance_floor:
-                warnings.append(f"User SL too close ({sl_distance} < {distance_floor}), using computed SL")
-            else:
+            # Check direction and distance bounds
+            direction_ok = (is_buy and sl_val < entry_price) or (not is_buy and sl_val > entry_price)
+
+            if not direction_ok:
                 warnings.append("User SL direction incorrect, using computed SL")
+            elif sl_distance < distance_floor:
+                warnings.append(f"User SL too close ({sl_distance:.6f} < {distance_floor:.6f}), using computed SL")
+            elif sl_distance > max_distance:
+                # Cap user SL to max_distance for margin safety
+                warnings.append(f"User SL too far ({sl_distance:.6f} > {max_distance:.6f}), capping to max")
+                if is_buy:
+                    sl_val = entry_price - max_distance
+                else:
+                    sl_val = entry_price + max_distance
+                use_user_sl = True
+            else:
+                use_user_sl = True
         except Exception:
             warnings.append("User SL parse failed, using computed SL")
 
     # Get SL
     if use_user_sl:
-        sl = Decimal(str(user_sl))
+        sl = sl_val
         log.info(f"Using user-provided SL: {sl}")
     else:
-        sl, _ = compute_sl_tp(symbol, action, entry_price)
+        sl, _ = compute_sl_tp(symbol, action, entry_price, leverage)
         log.info(f"Using computed SL: {sl}")
+
+    # Log margin risk
+    sl_pct = abs(entry_price - sl) / entry_price * 100
+    margin_risk_pct = sl_pct * leverage
+    log.info(f"SL distance={sl_pct:.2f}%, margin risk={margin_risk_pct:.1f}%")
 
     # Validate user TP
     use_user_tp = False

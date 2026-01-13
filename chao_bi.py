@@ -301,7 +301,7 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
     if USE_PY_RISK_MANAGER or sl is None or tp is None:
         log.info("Computing SL/TP using risk manager...")
         final_sl, final_tp, warnings = binance_api.select_sl_tp_with_preference(
-            symbol, action, ref_price, sl, tp
+            symbol, action, ref_price, sl, tp, leverage
         )
         for w in warnings:
             log.warning(w)

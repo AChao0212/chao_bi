@@ -11,9 +11,60 @@ This module provides a centralized logging system with:
 import logging
 import sys
 import inspect
-from datetime import datetime
-from typing import Optional, Callable
+import re
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Callable, Tuple
 from functools import wraps
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
+from config import LOG_TIMEZONE as LOG_TIMEZONE_CONFIG
+
+
+def _parse_timezone() -> Tuple[Optional[timezone], str]:
+    """
+    Parse timezone from config.
+
+    Returns:
+        Tuple of (timezone object or None for local, display string)
+    """
+    tz_config = LOG_TIMEZONE_CONFIG.strip()
+
+    # System local time
+    if tz_config.lower() == "system":
+        return (None, "local")
+
+    # UTC offset format: "+8", "-5", "+09", "-05:30"
+    offset_match = re.match(r'^([+-])(\d{1,2})(?::?(\d{2}))?$', tz_config)
+    if offset_match:
+        sign = 1 if offset_match.group(1) == '+' else -1
+        hours = int(offset_match.group(2))
+        minutes = int(offset_match.group(3) or 0)
+        offset = timedelta(hours=sign * hours, minutes=sign * minutes)
+        tz = timezone(offset)
+        display = f"UTC{'+' if sign > 0 else ''}{sign * hours}"
+        if minutes:
+            display += f":{minutes:02d}"
+        return (tz, display)
+
+    # Timezone name format: "Asia/Tokyo", "America/New_York"
+    if ZoneInfo is not None:
+        try:
+            tz = ZoneInfo(tz_config)
+            return (tz, tz_config)
+        except Exception:
+            pass
+
+    # Fallback to system time if parsing failed
+    print(f"[warn ] [logger] Invalid LOG_TIMEZONE '{tz_config}', using system time")
+    return (None, "local")
+
+
+# Parse timezone at module load
+_LOG_TZ, _LOG_TZ_DISPLAY = _parse_timezone()
 
 # =============================================================================
 # Configuration
@@ -167,11 +218,17 @@ class ModuleLogger:
             del frame
 
     def _format_message(self, message: str) -> str:
-        """Format message with fixed-width function name."""
+        """Format message with fixed-width function name and timestamp."""
         func_name = self._get_caller_func()
         # Pad or truncate to fixed width
         func_formatted = func_name[:self.FUNC_WIDTH].ljust(self.FUNC_WIDTH)
-        return f"[{func_formatted}]: {message}"
+        # Add timestamp with timezone from config
+        if _LOG_TZ is None:
+            now = datetime.now()  # System local time
+        else:
+            now = datetime.now(_LOG_TZ)
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        return f"[{func_formatted}][{timestamp} ({_LOG_TZ_DISPLAY})]: {message}"
 
     def debug(self, message: str) -> None:
         """Log a debug message."""

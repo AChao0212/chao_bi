@@ -84,6 +84,10 @@ RR_MAX = Decimal('3.0')        # 允許 LLM 給的 TP 與預設值距離差的�
 USE_PY_RISK_MANAGER = True
 # 最小止損距離（以入場價百分比）；避免 TP/SL 太貼近而「秒觸發」
 MIN_STOP_DISTANCE_PCT = Decimal('0.004')   # 0.4%
+# 最大保證金風險（SL觸發時損失保證金的百分比上限）
+# 此參數確保不同槓桿下的風險一致性
+# 例如：50% 表示 SL 觸發時最多損失 50% 保證金
+MAX_MARGIN_RISK_PCT = Decimal('0.50')  # 50%
 # ATR 參數（以 5 分鐘 K 線計算）
 ATR_PERIOD = 14
 ATR_K = Decimal('1.5')  # 止損距離至少為 ATR * ATR_K
@@ -95,3 +99,10 @@ ORDER_MONITOR_INTERVAL = 30
 RECONCILE_VERBOSE = True
 # Reconcile 間隔（秒）- 3-5分鐘不會觸發 Binance 限流
 RECONCILE_INTERVAL = 3 * 60  # 3 minutes
+
+# 日誌時區設定
+# 可選格式：
+#   - "system"          : 使用系統本地時間
+#   - "Asia/Tokyo"      : 使用時區名稱 (需要 Python 3.9+ 的 zoneinfo)
+#   - "+8" 或 "-5"      : 使用 UTC 偏移量
+LOG_TIMEZONE = "system"
