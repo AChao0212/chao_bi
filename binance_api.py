@@ -72,21 +72,37 @@ def _to_dict(obj) -> dict:
 
     The new Binance SDK returns typed response objects instead of dicts.
     This helper converts them to dicts for consistent access.
+
+    Handles OneOf wrapper pattern where actual data is in 'actual_instance'.
     """
     if obj is None:
         return {}
     if isinstance(obj, dict):
+        # Check for OneOf wrapper pattern: {'actual_instance': ..., 'one_of_schemas': ...}
+        if "actual_instance" in obj and obj["actual_instance"] is not None:
+            return _to_dict(obj["actual_instance"])
         return obj
     if isinstance(obj, list):
         return {"_list": obj}
-    # Try to convert object to dict
-    if hasattr(obj, "__dict__"):
-        return vars(obj)
+    # Try model_dump for pydantic models first
+    if hasattr(obj, "model_dump"):
+        result = obj.model_dump()
+        # Check if model_dump result has actual_instance (OneOf wrapper)
+        if isinstance(result, dict) and "actual_instance" in result and result["actual_instance"] is not None:
+            return _to_dict(result["actual_instance"])
+        return result
+    # Check for OneOf wrapper as object attribute
+    if hasattr(obj, "actual_instance") and getattr(obj, "actual_instance", None) is not None:
+        return _to_dict(obj.actual_instance)
     if hasattr(obj, "to_dict"):
         return obj.to_dict()
-    # Try model_dump for pydantic models
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
+    # Try to convert object to dict via __dict__
+    if hasattr(obj, "__dict__"):
+        d = vars(obj)
+        # Check for OneOf wrapper in __dict__
+        if "actual_instance" in d and d["actual_instance"] is not None:
+            return _to_dict(d["actual_instance"])
+        return d
     return {}
 
 # =============================================================================
@@ -273,25 +289,27 @@ def get_market_price(symbol: str) -> Optional[str]:
     if binance_client is None:
         return None
 
-    # Try symbol_price_ticker first
+    # Try symbol_price_ticker_v2 first (v1 is deprecated)
     try:
-        resp = binance_client.rest_api.symbol_price_ticker(symbol=symbol)
+        resp = binance_client.rest_api.symbol_price_ticker_v2(symbol=symbol)
         raw_data = resp.data()
         ticker = _to_dict(raw_data)
+        log.info(f"symbol_price_ticker_v2 response: {ticker}")
         price = ticker.get("price")
         if price:
-            return price
+            return str(price)
     except Exception as e:
-        log.warning(f"symbol_price_ticker failed for {symbol}: {e}")
+        log.warning(f"symbol_price_ticker_v2 failed for {symbol}: {e}")
 
     # Fallback: try mark_price
     try:
         resp = binance_client.rest_api.mark_price(symbol=symbol)
         raw_data = resp.data()
         mark_data = _to_dict(raw_data)
-        price = mark_data.get("markPrice") or mark_data.get("mark_price")
+        # SDK uses snake_case: mark_price
+        price = mark_data.get("mark_price") or mark_data.get("markPrice")
         if price:
-            return price
+            return str(price)
     except Exception as e:
         log.warning(f"mark_price failed for {symbol}: {e}")
 
@@ -300,9 +318,10 @@ def get_market_price(symbol: str) -> Optional[str]:
         resp = binance_client.rest_api.ticker24hr_price_change_statistics(symbol=symbol)
         raw_data = resp.data()
         ticker_data = _to_dict(raw_data)
-        price = ticker_data.get("lastPrice") or ticker_data.get("last_price")
+        # SDK uses snake_case: last_price
+        price = ticker_data.get("last_price") or ticker_data.get("lastPrice")
         if price:
-            return price
+            return str(price)
     except Exception as e:
         log.warning(f"ticker24hr_price_change_statistics failed for {symbol}: {e}")
 
