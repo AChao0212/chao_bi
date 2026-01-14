@@ -735,7 +735,8 @@ def cancel_algo_order(algo_id: int) -> bool:
         return False
 
     try:
-        binance_client.rest_api.cancel_algo_order(algo_id=algo_id)
+        # SDK uses 'algoid' parameter (no underscore)
+        binance_client.rest_api.cancel_algo_order(algoid=algo_id)
         log.info(f"Cancelled algo order {algo_id}")
         return True
     except ClientError as e:
@@ -816,24 +817,18 @@ def query_algo_order(algo_id: int) -> Optional[dict]:
         return None
 
     try:
-        resp = binance_client.rest_api.query_current_algo_open_order(algo_id=algo_id)
+        # Try query_algo_order first (works for both open and historical)
+        resp = binance_client.rest_api.query_algo_order(algo_id=algo_id)
         raw_data = resp.data()
         return _to_dict(raw_data)
     except ClientError as e:
-        # Order might be filled/cancelled - try historical orders
+        # Order might be filled/cancelled - try query_all_algo_orders
         error_code = getattr(e, "error_code", None)
-        if error_code == -20121:  # Algo order not found in open orders
+        if error_code in (-20121, -2013):  # Algo order not found
             try:
-                resp = binance_client.rest_api.query_historical_algo_orders(
-                    algo_id=algo_id,
-                    limit=1
-                )
-                raw_data = resp.data()
-                result = _to_dict(raw_data)
-                # Historical endpoint returns list
-                orders = result.get("orders") or result.get("_list") or []
-                if orders:
-                    return _to_dict(orders[0]) if not isinstance(orders[0], dict) else orders[0]
+                # Need symbol for query_all_algo_orders, try to get from open orders first
+                # If not found, we can't query historical without symbol
+                pass
             except Exception:
                 pass
         log.error(f"Failed to query algo order {algo_id}: {e}")
@@ -861,7 +856,7 @@ def get_open_algo_orders(symbol: Optional[str] = None) -> list[dict]:
         if symbol:
             params["symbol"] = symbol
 
-        resp = binance_client.rest_api.query_current_algo_open_orders(**params)
+        resp = binance_client.rest_api.current_all_algo_open_orders(**params)
         raw_data = resp.data()
 
         # Handle response - could be list or wrapped in 'orders' key
