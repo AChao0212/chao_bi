@@ -714,9 +714,18 @@ def cancel_order(symbol: str, order_id: int) -> bool:
         log.info(f"Cancelled order {order_id} @ {symbol}")
         return True
     except ClientError as e:
+        error_code = getattr(e, "error_code", None)
+        # -2011: Unknown order - order already filled/cancelled (expected)
+        if error_code == -2011:
+            log.info(f"Order {order_id} @ {symbol} already closed (no action needed)")
+            return True  # Not an error - order is already gone
         log.error(f"Failed to cancel order {symbol}/{order_id}: {e}")
         return False
     except Exception as e:
+        # Check for -2011 in exception message
+        if "-2011" in str(e):
+            log.info(f"Order {order_id} @ {symbol} already closed (no action needed)")
+            return True
         log.error(f"Unexpected error cancelling {symbol}/{order_id}: {e}")
         return False
 
@@ -740,9 +749,18 @@ def cancel_algo_order(algo_id: int) -> bool:
         log.info(f"Cancelled algo order {algo_id}")
         return True
     except ClientError as e:
+        error_code = getattr(e, "error_code", None)
+        # -2011: Unknown order - order already filled/cancelled (expected)
+        if error_code == -2011:
+            log.info(f"Algo order {algo_id} already closed (no action needed)")
+            return True  # Not an error - order is already gone
         log.error(f"Failed to cancel algo order {algo_id}: {e}")
         return False
     except Exception as e:
+        # Check for -2011 in exception message
+        if "-2011" in str(e):
+            log.info(f"Algo order {algo_id} already closed (no action needed)")
+            return True
         log.error(f"Unexpected error cancelling algo order {algo_id}: {e}")
         return False
 
