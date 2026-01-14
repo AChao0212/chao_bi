@@ -697,7 +697,7 @@ def get_open_orders(symbol: Optional[str] = None) -> list[dict]:
 
 def cancel_order(symbol: str, order_id: int) -> bool:
     """
-    Cancel an order safely (no exception on failure).
+    Cancel a regular order safely (no exception on failure).
 
     Args:
         symbol: Trading pair
@@ -718,6 +718,31 @@ def cancel_order(symbol: str, order_id: int) -> bool:
         return False
     except Exception as e:
         log.error(f"Unexpected error cancelling {symbol}/{order_id}: {e}")
+        return False
+
+
+def cancel_algo_order(algo_id: int) -> bool:
+    """
+    Cancel an algo order safely (no exception on failure).
+
+    Args:
+        algo_id: Algo order ID to cancel
+
+    Returns:
+        True if cancelled successfully, False otherwise
+    """
+    if binance_client is None:
+        return False
+
+    try:
+        binance_client.rest_api.cancel_algo_order(algo_id=algo_id)
+        log.info(f"Cancelled algo order {algo_id}")
+        return True
+    except ClientError as e:
+        log.error(f"Failed to cancel algo order {algo_id}: {e}")
+        return False
+    except Exception as e:
+        log.error(f"Unexpected error cancelling algo order {algo_id}: {e}")
         return False
 
 
@@ -775,6 +800,106 @@ def get_user_trades(symbol: str, order_id: Optional[int] = None, limit: int = 50
     except Exception as e:
         log.error(f"Failed to get user trades: {e}")
         return []
+
+
+def query_algo_order(algo_id: int) -> Optional[dict]:
+    """
+    Query a specific algo order by algoId.
+
+    Args:
+        algo_id: The algo order ID returned by new_algo_order
+
+    Returns:
+        Algo order info dict or None if not found
+    """
+    if binance_client is None:
+        return None
+
+    try:
+        resp = binance_client.rest_api.query_current_algo_open_order(algo_id=algo_id)
+        raw_data = resp.data()
+        return _to_dict(raw_data)
+    except ClientError as e:
+        # Order might be filled/cancelled - try historical orders
+        error_code = getattr(e, "error_code", None)
+        if error_code == -20121:  # Algo order not found in open orders
+            try:
+                resp = binance_client.rest_api.query_historical_algo_orders(
+                    algo_id=algo_id,
+                    limit=1
+                )
+                raw_data = resp.data()
+                result = _to_dict(raw_data)
+                # Historical endpoint returns list
+                orders = result.get("orders") or result.get("_list") or []
+                if orders:
+                    return _to_dict(orders[0]) if not isinstance(orders[0], dict) else orders[0]
+            except Exception:
+                pass
+        log.error(f"Failed to query algo order {algo_id}: {e}")
+        return None
+    except Exception as e:
+        log.error(f"Failed to query algo order {algo_id}: {e}")
+        return None
+
+
+def get_open_algo_orders(symbol: Optional[str] = None) -> list[dict]:
+    """
+    Get all open algo (conditional) orders.
+
+    Args:
+        symbol: Filter by trading pair (None for all)
+
+    Returns:
+        List of open algo order dicts
+    """
+    if binance_client is None:
+        return []
+
+    try:
+        params = {"recv_window": 5000}
+        if symbol:
+            params["symbol"] = symbol
+
+        resp = binance_client.rest_api.query_current_algo_open_orders(**params)
+        raw_data = resp.data()
+
+        # Handle response - could be list or wrapped in 'orders' key
+        if isinstance(raw_data, list):
+            return [_to_dict(o) if not isinstance(o, dict) else o for o in raw_data]
+        else:
+            temp = _to_dict(raw_data)
+            orders = temp.get("orders") or temp.get("_list") or []
+            return [_to_dict(o) if not isinstance(o, dict) else o for o in orders]
+    except Exception as e:
+        log.error(f"Failed to get open algo orders: {e}")
+        return []
+
+
+def is_algo_order_filled(algo_id: int) -> tuple[bool, Optional[dict]]:
+    """
+    Check if an algo order has been triggered/filled.
+
+    Args:
+        algo_id: The algo order ID
+
+    Returns:
+        Tuple of (is_filled, algo_order_data)
+    """
+    order = query_algo_order(algo_id)
+    if not order:
+        return (False, None)
+
+    # Check algoStatus: NEW, TRIGGERED, CANCELLED, EXPIRED, FILLED
+    status = (order.get("algoStatus") or order.get("algo_status") or "").upper()
+
+    # If TRIGGERED or FILLED, the algo order executed
+    # actualOrderId is the ID of the actual market order placed when triggered
+    actual_order_id = order.get("actualOrderId") or order.get("actual_order_id")
+
+    is_filled = status in ("TRIGGERED", "FILLED") or (actual_order_id and int(actual_order_id) > 0)
+
+    return (is_filled, order)
 
 
 # =============================================================================
@@ -1508,6 +1633,7 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
     Log a closed trade to the trade log.
 
     Determines outcome (WIN/LOSS/MANUAL) by checking which exit order filled.
+    Handles both regular orders and algo orders (SL/TP placed via new_algo_order).
 
     Args:
         entry_id: Entry order ID
@@ -1519,53 +1645,85 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
         tp_id = trade_record.get("tp_order_id")
 
         closing_order_id = None
+        actual_order_id = None  # For algo orders, the actual market order ID
         outcome = "MANUAL"
         realized_pnl = 0.0
         exit_price = 0.0
 
-        # Check if TP filled (WIN)
+        # Check if TP filled (WIN) - try algo order first, then regular order
         if tp_id:
-            tp_order = query_order(symbol, order_id=tp_id)
-            if tp_order and tp_order.get("status") == "FILLED":
+            tp_filled, tp_algo = is_algo_order_filled(tp_id)
+            if tp_filled and tp_algo:
                 closing_order_id = tp_id
+                actual_order_id = tp_algo.get("actualOrderId") or tp_algo.get("actual_order_id")
                 outcome = "WIN"
+                log.info(f"TP algo order {tp_id} triggered, actualOrderId={actual_order_id}")
+            else:
+                # Fallback: try regular order query
+                tp_order = query_order(symbol, order_id=tp_id)
+                if tp_order and str(tp_order.get("status", "")).upper() == "FILLED":
+                    closing_order_id = tp_id
+                    outcome = "WIN"
+                    log.info(f"TP regular order {tp_id} filled")
 
-        # Check if SL filled (LOSS)
+        # Check if SL filled (LOSS) - try algo order first, then regular order
         if not closing_order_id and sl_id:
-            sl_order = query_order(symbol, order_id=sl_id)
-            if sl_order and sl_order.get("status") == "FILLED":
+            sl_filled, sl_algo = is_algo_order_filled(sl_id)
+            if sl_filled and sl_algo:
                 closing_order_id = sl_id
+                actual_order_id = sl_algo.get("actualOrderId") or sl_algo.get("actual_order_id")
                 outcome = "LOSS"
+                log.info(f"SL algo order {sl_id} triggered, actualOrderId={actual_order_id}")
+            else:
+                # Fallback: try regular order query
+                sl_order = query_order(symbol, order_id=sl_id)
+                if sl_order and str(sl_order.get("status", "")).upper() == "FILLED":
+                    closing_order_id = sl_id
+                    outcome = "LOSS"
+                    log.info(f"SL regular order {sl_id} filled")
 
         # Get PnL from trades
         if closing_order_id:
-            trades = get_user_trades(symbol, order_id=closing_order_id)
+            # For algo orders, use actualOrderId to get trades
+            order_id_for_trades = int(actual_order_id) if actual_order_id else closing_order_id
+            trades = get_user_trades(symbol, order_id=order_id_for_trades)
             if trades:
-                realized_pnl = sum(float(t.get("realizedPnl", 0.0)) for t in trades)
+                realized_pnl = sum(float(t.get("realizedPnl") or t.get("realized_pnl") or 0.0) for t in trades)
                 exit_price = trades[-1].get("price", 0.0)
+                log.info(f"Got {len(trades)} trades, PnL={realized_pnl}, exit_price={exit_price}")
 
-                # Cancel the other exit order
-                if closing_order_id == tp_id and sl_id:
-                    cancel_order(symbol, sl_id)
-                elif closing_order_id == sl_id and tp_id:
-                    cancel_order(symbol, tp_id)
+            # Cancel the other exit order (try algo cancel first, then regular)
+            other_id = sl_id if closing_order_id == tp_id else (tp_id if closing_order_id == sl_id else None)
+            if other_id:
+                # Try to cancel as algo order first, then regular order
+                if not cancel_algo_order(other_id):
+                    cancel_order(symbol, other_id)
         else:
             # Manual close - try to get recent trade
             try:
-                recent_trades = get_user_trades(symbol, limit=5)
-                if recent_trades:
-                    last_trade = recent_trades[-1]
-                    realized_pnl = float(last_trade.get("realizedPnl", 0.0))
-                    exit_price = last_trade.get("price", 0.0)
+                recent_trades = get_user_trades(symbol, limit=10)
+                position_side = (trade_record.get("position_side") or "").upper()
 
-                    if realized_pnl > 0:
-                        outcome = "WIN"
-                    elif realized_pnl < 0:
-                        outcome = "LOSS"
-                    else:
-                        outcome = "DRAW"
-            except Exception:
-                pass
+                # Find trades matching our position side
+                for trade in reversed(recent_trades):
+                    trade_side = (trade.get("positionSide") or trade.get("position_side") or "").upper()
+                    pnl = float(trade.get("realizedPnl") or trade.get("realized_pnl") or 0.0)
+
+                    # Match by position side and non-zero PnL (closing trade)
+                    if trade_side == position_side and pnl != 0:
+                        realized_pnl = pnl
+                        exit_price = trade.get("price", 0.0)
+
+                        if realized_pnl > 0:
+                            outcome = "WIN"
+                        elif realized_pnl < 0:
+                            outcome = "LOSS"
+                        else:
+                            outcome = "DRAW"
+                        log.info(f"Found closing trade: PnL={realized_pnl}, exit_price={exit_price}")
+                        break
+            except Exception as e:
+                log.error(f"Failed to get recent trades: {e}")
 
         # Log to CSV
         log_trade({
@@ -1580,6 +1738,7 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
             "win_loss_draw": outcome,
             "raw_signal": trade_record.get("raw_signal"),
         })
+        log.info(f"Trade logged: {symbol} {outcome} PnL={realized_pnl}")
 
     except Exception as e:
         log.error(f"Failed to log trade (Entry {entry_id}): {e}")
@@ -1668,12 +1827,22 @@ def resume_tracked_trades(event_loop=None) -> None:
                     continue
 
                 # Position open - check for missing SL/TP
+                # Check regular orders first
                 open_orders = get_open_orders(symbol)
                 has_exit = any(
                     _is_exit_order(o) and
-                    (o.get("positionSide") or "").upper() == position_side
+                    (o.get("positionSide") or o.get("position_side") or "").upper() == position_side
                     for o in open_orders
                 )
+
+                # Also check algo orders (SL/TP are placed as algo orders)
+                if not has_exit:
+                    algo_orders = get_open_algo_orders(symbol)
+                    has_exit = any(
+                        _is_algo_exit_order(o) and
+                        (o.get("positionSide") or o.get("position_side") or "").upper() == position_side
+                        for o in algo_orders
+                    )
 
                 if has_exit:
                     log.info(f"{symbol}/{entry_id} already has SL/TP orders")
@@ -1704,16 +1873,45 @@ def resume_tracked_trades(event_loop=None) -> None:
 # =============================================================================
 
 def _is_exit_order(order: dict) -> bool:
-    """Check if an order is an exit (SL/TP) order."""
+    """Check if a regular order is an exit (SL/TP) order."""
     order_type = (order.get("type") or "").upper()
     is_exit_type = order_type in (
         "STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT"
     )
 
-    close_position = str(order.get("closePosition", order.get("closeposition", ""))).lower()
-    reduce_only = str(order.get("reduceOnly", "")).lower()
+    # Check both camelCase and snake_case field names
+    close_position = str(
+        order.get("closePosition") or
+        order.get("close_position") or
+        order.get("closeposition") or ""
+    ).lower()
+    reduce_only = str(
+        order.get("reduceOnly") or
+        order.get("reduce_only") or ""
+    ).lower()
 
     return is_exit_type and (close_position == "true" or reduce_only == "true")
+
+
+def _is_algo_exit_order(order: dict) -> bool:
+    """Check if an algo order is an exit (SL/TP) order."""
+    # Algo orders have different structure
+    order_type = (order.get("type") or order.get("algoType") or order.get("algo_type") or "").upper()
+    is_exit_type = order_type in (
+        "STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "CONDITIONAL"
+    )
+
+    # Check algoStatus - should be NEW or active
+    algo_status = (order.get("algoStatus") or order.get("algo_status") or "").upper()
+    is_active = algo_status in ("NEW", "")
+
+    # Check close position flag
+    close_position = str(
+        order.get("closePosition") or
+        order.get("close_position") or ""
+    ).lower()
+
+    return is_exit_type and is_active and close_position == "true"
 
 
 def _derive_position_side(order: dict, is_exit: bool) -> str:
@@ -1861,6 +2059,88 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
         except Exception as e:
             if RECONCILE_VERBOSE:
                 log.error(f"Error processing order: {e}")
+
+    # Also reconcile algo orders (SL/TP are placed as algo orders)
+    try:
+        algo_orders = get_open_algo_orders()
+        log.info(f"Found {len(algo_orders)} open algo orders")
+
+        for order in algo_orders:
+            try:
+                symbol = order.get("symbol")
+                algo_id = order.get("algoId") or order.get("algo_id")
+
+                if not symbol or not algo_id:
+                    continue
+
+                is_exit = _is_algo_exit_order(order)
+                pos_side = (order.get("positionSide") or order.get("position_side") or "").upper()
+                if not pos_side:
+                    # Derive from side
+                    side = (order.get("side") or "").upper()
+                    pos_side = "SHORT" if side == "BUY" else "LONG"
+
+                order_type = (order.get("type") or "").upper()
+
+                if RECONCILE_VERBOSE:
+                    try:
+                        log.info(f"Algo order: {json.dumps(order, ensure_ascii=False)}")
+                    except Exception:
+                        log.info(f"Algo order: {order}")
+
+                # Handle orphan algo exit orders
+                if is_exit:
+                    pos_amt = get_position_amount(symbol, pos_side)
+
+                    if RECONCILE_VERBOSE:
+                        log.info(f"Position ({symbol}, {pos_side}): {pos_amt}")
+
+                    if abs(pos_amt) == Decimal("0") or (symbol, pos_side) not in positions:
+                        # Try to log the trade first
+                        logged = False
+                        for key, record in list(_tracked_trades.items()):
+                            rec_symbol = record.get("symbol")
+                            rec_side = (record.get("position_side") or "").upper()
+                            rec_sl_id = record.get("sl_order_id")
+                            rec_tp_id = record.get("tp_order_id")
+
+                            if rec_symbol == symbol and rec_side == pos_side:
+                                if algo_id in (rec_sl_id, rec_tp_id):
+                                    entry_id = record.get("entry_order_id") or key
+                                    log.info(f"Found trade for orphan algo order {algo_id}")
+                                    try:
+                                        _log_closed_trade(entry_id, record, symbol)
+                                        clear_closed_trade(entry_id)
+                                        logged = True
+                                    except Exception as e:
+                                        log.error(f"Failed to log trade: {e}")
+                                    break
+
+                        # Cancel the orphan algo order
+                        if cancel_algo_order(algo_id):
+                            summary["orphan_exits"].append({
+                                "symbol": symbol,
+                                "algoId": algo_id,
+                                "type": order_type,
+                                "positionSide": pos_side,
+                                "logged": logged,
+                            })
+
+                            _notify_user(
+                                f"Cleaned orphan algo SL/TP\n"
+                                f"Symbol: {symbol}\n"
+                                f"Type: {order_type}\n"
+                                f"Side: {pos_side}\n"
+                                f"Logged: {'Yes' if logged else 'No'}",
+                                loop=event_loop
+                            )
+
+            except Exception as e:
+                if RECONCILE_VERBOSE:
+                    log.error(f"Error processing algo order: {e}")
+
+    except Exception as e:
+        log.error(f"Failed to reconcile algo orders: {e}")
 
     log.info(
         f"Complete. "
