@@ -168,6 +168,7 @@ def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
             api_key=BINANCE_API_KEY,
             api_secret=BINANCE_API_SECRET,
             base_path=REAL_FUTURES_BASE_URL or DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL,
+            timeout=5000,  # 5 seconds timeout (default was 1s which caused timeouts)
         )
         client = DerivativesTradingUsdsFutures(config_rest_api=config)
 
@@ -1390,13 +1391,43 @@ def cap_quantity_by_margin(
 # 10. EXIT ORDER MANAGEMENT
 # =============================================================================
 
+def _check_existing_exit_orders(symbol: str, position_side: str) -> tuple[Optional[int], Optional[int]]:
+    """
+    Check if SL/TP orders already exist for a position.
+
+    Returns:
+        Tuple of (existing_sl_id, existing_tp_id) - None if not found
+    """
+    existing_sl_id = None
+    existing_tp_id = None
+
+    try:
+        algo_orders = get_open_algo_orders(symbol)
+        for order in algo_orders:
+            order_pos_side = (order.get("positionSide") or order.get("position_side") or "").upper()
+            order_type = (order.get("type") or order.get("order_type") or "").upper()
+            close_position = str(order.get("closePosition") or order.get("close_position") or "").lower()
+
+            if order_pos_side == position_side.upper() and close_position == "true":
+                algo_id = order.get("algoId") or order.get("algo_id")
+                if order_type == "STOP_MARKET":
+                    existing_sl_id = algo_id
+                elif order_type == "TAKE_PROFIT_MARKET":
+                    existing_tp_id = algo_id
+    except Exception as e:
+        log.warning(f"Failed to check existing exit orders: {e}")
+
+    return (existing_sl_id, existing_tp_id)
+
+
 def attach_exit_orders(
     symbol: str,
     position_side: str,
     sl_price: str,
     tp_price: str,
     entry_order_id: Optional[int] = None,
-    working_type: str = "MARK_PRICE"
+    working_type: str = "MARK_PRICE",
+    max_retries: int = 3
 ) -> tuple[Optional[int], Optional[int]]:
     """
     Attach stop-loss and take-profit orders to a position.
@@ -1408,12 +1439,25 @@ def attach_exit_orders(
         tp_price: Take-profit price
         entry_order_id: Associated entry order ID
         working_type: Price type for triggers ('MARK_PRICE' or 'CONTRACT_PRICE')
+        max_retries: Maximum retry attempts for each order
 
     Returns:
         Tuple of (sl_order_id, tp_order_id)
     """
     if binance_client is None:
         return (None, None)
+
+    # Check if SL/TP already exist (prevents -4130 duplicate order error)
+    existing_sl_id, existing_tp_id = _check_existing_exit_orders(symbol, position_side)
+    if existing_sl_id and existing_tp_id:
+        log.info(f"SL/TP already exist for {symbol}/{position_side}: SL={existing_sl_id}, TP={existing_tp_id}")
+        # Update state with existing IDs
+        if entry_order_id is not None:
+            try:
+                update_exits_for_trade(entry_order_id, existing_sl_id, existing_tp_id)
+            except Exception as e:
+                log.error(f"Failed to update state with existing SL/TP IDs: {e}")
+        return (existing_sl_id, existing_tp_id)
 
     close_side = "SELL" if position_side == "LONG" else "BUY"
 
@@ -1443,31 +1487,72 @@ def attach_exit_orders(
         "price_protect": "true",
     }
 
-    try:
-        log.info("Placing SL order (STOP_MARKET, closePosition=true)...")
-        sl_resp = binance_client.rest_api.new_algo_order(**sl_params)
-        sl_data = _to_dict(sl_resp.data())
-        sl_id = sl_data.get("algoId") or sl_data.get("algo_id") or sl_data.get("orderId") or sl_data.get("order_id")
-        log.info(f"SL order placed (ID: {sl_id})")
+    sl_id = existing_sl_id  # Use existing if found
+    tp_id = existing_tp_id
 
-        log.info("Placing TP order (TAKE_PROFIT_MARKET, closePosition=true)...")
-        tp_resp = binance_client.rest_api.new_algo_order(**tp_params)
-        tp_data = _to_dict(tp_resp.data())
-        tp_id = tp_data.get("algoId") or tp_data.get("algo_id") or tp_data.get("orderId") or tp_data.get("order_id")
-        log.info(f"TP order placed (ID: {tp_id})")
-
-        # Update state
-        if entry_order_id is not None:
+    # Place SL order with retry
+    if sl_id is None:
+        for attempt in range(max_retries):
             try:
-                update_exits_for_trade(entry_order_id, sl_id, tp_id)
+                log.info(f"Placing SL order (attempt {attempt + 1}/{max_retries})...")
+                sl_resp = binance_client.rest_api.new_algo_order(**sl_params)
+                sl_data = _to_dict(sl_resp.data())
+                sl_id = sl_data.get("algoId") or sl_data.get("algo_id") or sl_data.get("orderId") or sl_data.get("order_id")
+                log.info(f"SL order placed (ID: {sl_id})")
+                break
+            except ClientError as e:
+                error_code = getattr(e, "error_code", None)
+                # -4130: Duplicate order already exists
+                if error_code == -4130:
+                    log.info(f"SL order already exists for {symbol}/{position_side}")
+                    existing_sl_id, _ = _check_existing_exit_orders(symbol, position_side)
+                    sl_id = existing_sl_id
+                    break
+                log.error(f"SL order attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
             except Exception as e:
-                log.error(f"Failed to update state with SL/TP IDs: {e}")
+                log.error(f"SL order attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
 
-        return (sl_id, tp_id)
+    # Place TP order with retry
+    if tp_id is None:
+        for attempt in range(max_retries):
+            try:
+                log.info(f"Placing TP order (attempt {attempt + 1}/{max_retries})...")
+                tp_resp = binance_client.rest_api.new_algo_order(**tp_params)
+                tp_data = _to_dict(tp_resp.data())
+                tp_id = tp_data.get("algoId") or tp_data.get("algo_id") or tp_data.get("orderId") or tp_data.get("order_id")
+                log.info(f"TP order placed (ID: {tp_id})")
+                break
+            except ClientError as e:
+                error_code = getattr(e, "error_code", None)
+                # -4130: Duplicate order already exists
+                if error_code == -4130:
+                    log.info(f"TP order already exists for {symbol}/{position_side}")
+                    _, existing_tp_id = _check_existing_exit_orders(symbol, position_side)
+                    tp_id = existing_tp_id
+                    break
+                log.error(f"TP order attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+            except Exception as e:
+                log.error(f"TP order attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1)
 
-    except ClientError as e:
-        log.error(f"Failed to attach SL/TP orders: {e}")
-        return (None, None)
+    # Update state
+    if entry_order_id is not None and (sl_id or tp_id):
+        try:
+            update_exits_for_trade(entry_order_id, sl_id, tp_id)
+        except Exception as e:
+            log.error(f"Failed to update state with SL/TP IDs: {e}")
+
+    if sl_id is None or tp_id is None:
+        log.error(f"Failed to attach all exit orders: SL={sl_id}, TP={tp_id}")
+
+    return (sl_id, tp_id)
 
 
 # =============================================================================
@@ -1707,29 +1792,38 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> bool:
 
         # If no actualOrderId or algo query failed, try recent trades fallback
         if realized_pnl == 0.0 and exit_price == 0.0:
-            # Manual close - try to get recent trade
+            # Manual close - try to get recent trades
             try:
-                recent_trades = get_user_trades(symbol, limit=10)
+                recent_trades = get_user_trades(symbol, limit=20)
                 position_side = (trade_record.get("position_side") or "").upper()
 
-                # Find trades matching our position side
-                for trade in reversed(recent_trades):
+                # Find ALL trades matching our position side and sum their PnL
+                # (a single closePosition order can fill in multiple trades)
+                matching_trades = []
+                for trade in recent_trades:
                     trade_side = (trade.get("positionSide") or trade.get("position_side") or "").upper()
                     pnl = float(trade.get("realizedPnl") or trade.get("realized_pnl") or 0.0)
 
                     # Match by position side and non-zero PnL (closing trade)
                     if trade_side == position_side and pnl != 0:
-                        realized_pnl = pnl
-                        exit_price = trade.get("price", 0.0)
+                        matching_trades.append(trade)
 
-                        if realized_pnl > 0:
-                            outcome = "WIN"
-                        elif realized_pnl < 0:
-                            outcome = "LOSS"
-                        else:
-                            outcome = "DRAW"
-                        log.info(f"Found closing trade: PnL={realized_pnl}, exit_price={exit_price}")
-                        break
+                if matching_trades:
+                    # Sum PnL from all matching trades
+                    realized_pnl = sum(
+                        float(t.get("realizedPnl") or t.get("realized_pnl") or 0.0)
+                        for t in matching_trades
+                    )
+                    # Use the last trade's price as exit price
+                    exit_price = matching_trades[-1].get("price", 0.0)
+
+                    if realized_pnl > 0:
+                        outcome = "WIN"
+                    elif realized_pnl < 0:
+                        outcome = "LOSS"
+                    else:
+                        outcome = "DRAW"
+                    log.info(f"Found {len(matching_trades)} closing trades: total PnL={realized_pnl}, exit_price={exit_price}")
             except Exception as e:
                 log.error(f"Failed to get recent trades: {e}")
 
