@@ -1625,13 +1625,20 @@ async def monitor_position_closes(poll_interval: int = 60) -> None:
                 if pos_amt == 0:
                     log.info(f"Position closed: {symbol}/{position_side}")
 
-                    _log_closed_trade(entry_id, record, symbol)
-                    clear_closed_trade(entry_id)
-
-                    _notify_user(
-                        f"Position closed\nSymbol: {symbol}\nSide: {position_side}\nTrade logged",
-                        loop=_telegram_client.loop if _telegram_client else None
-                    )
+                    logged_ok = _log_closed_trade(entry_id, record, symbol)
+                    if logged_ok:
+                        clear_closed_trade(entry_id)
+                        _notify_user(
+                            f"Position closed\nSymbol: {symbol}\nSide: {position_side}\nTrade logged",
+                            loop=_telegram_client.loop if _telegram_client else None
+                        )
+                    else:
+                        # Don't clear trade data if logging failed - will retry next poll
+                        log.warning(f"Trade logging failed for {symbol}/{entry_id}, will retry")
+                        _notify_user(
+                            f"Position closed but logging failed\nSymbol: {symbol}\nSide: {position_side}\nWill retry...",
+                            loop=_telegram_client.loop if _telegram_client else None
+                        )
 
             except Exception as e:
                 log.error(f"Error processing {key}: {e}")
@@ -1641,7 +1648,7 @@ async def monitor_position_closes(poll_interval: int = 60) -> None:
 # 12. TRADE LOGGING
 # =============================================================================
 
-def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
+def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> bool:
     """
     Log a closed trade to the trade log.
 
@@ -1652,6 +1659,9 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
         entry_id: Entry order ID
         trade_record: Trade state record
         symbol: Trading pair
+
+    Returns:
+        True if trade was logged successfully, False otherwise
     """
     try:
         sl_id = trade_record.get("sl_order_id")
@@ -1663,7 +1673,7 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
         realized_pnl = 0.0
         exit_price = 0.0
 
-        # Check if TP filled (WIN) - try algo order first, then regular order
+        # Check if TP filled (WIN) - algo orders only (SL/TP are placed via new_algo_order)
         if tp_id:
             tp_filled, tp_algo = is_algo_order_filled(tp_id)
             if tp_filled and tp_algo:
@@ -1671,15 +1681,8 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
                 actual_order_id = tp_algo.get("actualOrderId") or tp_algo.get("actual_order_id")
                 outcome = "WIN"
                 log.info(f"TP algo order {tp_id} triggered, actualOrderId={actual_order_id}")
-            else:
-                # Fallback: try regular order query
-                tp_order = query_order(symbol, order_id=tp_id)
-                if tp_order and str(tp_order.get("status", "")).upper() == "FILLED":
-                    closing_order_id = tp_id
-                    outcome = "WIN"
-                    log.info(f"TP regular order {tp_id} filled")
 
-        # Check if SL filled (LOSS) - try algo order first, then regular order
+        # Check if SL filled (LOSS) - algo orders only
         if not closing_order_id and sl_id:
             sl_filled, sl_algo = is_algo_order_filled(sl_id)
             if sl_filled and sl_algo:
@@ -1687,31 +1690,23 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
                 actual_order_id = sl_algo.get("actualOrderId") or sl_algo.get("actual_order_id")
                 outcome = "LOSS"
                 log.info(f"SL algo order {sl_id} triggered, actualOrderId={actual_order_id}")
-            else:
-                # Fallback: try regular order query
-                sl_order = query_order(symbol, order_id=sl_id)
-                if sl_order and str(sl_order.get("status", "")).upper() == "FILLED":
-                    closing_order_id = sl_id
-                    outcome = "LOSS"
-                    log.info(f"SL regular order {sl_id} filled")
 
         # Get PnL from trades
-        if closing_order_id:
-            # For algo orders, use actualOrderId to get trades
-            order_id_for_trades = int(actual_order_id) if actual_order_id else closing_order_id
-            trades = get_user_trades(symbol, order_id=order_id_for_trades)
+        if closing_order_id and actual_order_id:
+            # For algo orders, use actualOrderId to get trades (algo IDs can't be used with account_trade_list)
+            trades = get_user_trades(symbol, order_id=int(actual_order_id))
             if trades:
                 realized_pnl = sum(float(t.get("realizedPnl") or t.get("realized_pnl") or 0.0) for t in trades)
                 exit_price = trades[-1].get("price", 0.0)
                 log.info(f"Got {len(trades)} trades, PnL={realized_pnl}, exit_price={exit_price}")
 
-            # Cancel the other exit order (try algo cancel first, then regular)
+            # Cancel the other exit order (algo orders only)
             other_id = sl_id if closing_order_id == tp_id else (tp_id if closing_order_id == sl_id else None)
             if other_id:
-                # Try to cancel as algo order first, then regular order
-                if not cancel_algo_order(other_id):
-                    cancel_order(symbol, other_id)
-        else:
+                cancel_algo_order(other_id)
+
+        # If no actualOrderId or algo query failed, try recent trades fallback
+        if realized_pnl == 0.0 and exit_price == 0.0:
             # Manual close - try to get recent trade
             try:
                 recent_trades = get_user_trades(symbol, limit=10)
@@ -1752,9 +1747,11 @@ def _log_closed_trade(entry_id, trade_record: dict, symbol: str) -> None:
             "raw_signal": trade_record.get("raw_signal"),
         })
         log.info(f"Trade logged: {symbol} {outcome} PnL={realized_pnl}")
+        return True
 
     except Exception as e:
         log.error(f"Failed to log trade (Entry {entry_id}): {e}")
+        return False
 
 
 # =============================================================================
@@ -1835,8 +1832,11 @@ def resume_tracked_trades(event_loop=None) -> None:
                 # Position closed - log and clean up
                 if pos_amt == 0:
                     log.info(f"Position closed: {symbol}, logging trade...")
-                    _log_closed_trade(entry_id, record, symbol)
-                    clear_closed_trade(entry_id)
+                    logged_ok = _log_closed_trade(entry_id, record, symbol)
+                    if logged_ok:
+                        clear_closed_trade(entry_id)
+                    else:
+                        log.warning(f"Trade logging failed for {symbol}/{entry_id}, keeping in state for retry")
                     continue
 
                 # Position open - check for missing SL/TP
@@ -2018,12 +2018,9 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
                             if order_id in (rec_sl_id, rec_tp_id):
                                 entry_id = record.get("entry_order_id") or key
                                 log.info(f"Found trade for orphan order {order_id}")
-                                try:
-                                    _log_closed_trade(entry_id, record, symbol)
+                                logged = _log_closed_trade(entry_id, record, symbol)
+                                if logged:
                                     clear_closed_trade(entry_id)
-                                    logged = True
-                                except Exception as e:
-                                    log.error(f"Failed to log trade: {e}")
                                 break
 
                     if cancel_order(symbol, order_id):
@@ -2121,12 +2118,9 @@ def reconcile_orders(event_loop=None, timeout_seconds: int = AUTO_CANCEL_SECONDS
                                 if algo_id in (rec_sl_id, rec_tp_id):
                                     entry_id = record.get("entry_order_id") or key
                                     log.info(f"Found trade for orphan algo order {algo_id}")
-                                    try:
-                                        _log_closed_trade(entry_id, record, symbol)
+                                    logged = _log_closed_trade(entry_id, record, symbol)
+                                    if logged:
                                         clear_closed_trade(entry_id)
-                                        logged = True
-                                    except Exception as e:
-                                        log.error(f"Failed to log trade: {e}")
                                     break
 
                         # Cancel the orphan algo order

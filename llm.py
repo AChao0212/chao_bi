@@ -33,18 +33,22 @@ Your only task is to analyze the following text and strictly convert it to JSON 
 1. **Strictly follow format**. If message is just chat or analysis (e.g., "BTC surging"), 'action' must be "NONE". Ignore emojis.
 2. **Symbol**: (e.g., "BTC", "ETH", "SOL") automatically append "USDT".
 3. **Direction**: "空" equals "SELL". "多" equals "BUY".
-4. **Entry (entry_price)**:
+4. **CRITICAL - Profit/Result Messages are NOT Signals**:
+   - If message contains profit keywords (浮盈, 盈利, 利潤, 利润, 獲利, 获利, ➕, +%), it is reporting existing results, NOT a new signal → action="NONE"
+   - If message describes smooth/successful trades (絲滑, 丝滑, 順利, 顺利), it is reporting results → action="NONE"
+   - If message mentions "多" or "空" but is talking about current/past positions with profit, it is NOT a new signal → action="NONE"
+5. **Entry (entry_price)**:
    - If range (e.g., "146.23-141.70"), take ONLY the first number (e.g., "146.23").
    - If "market price" (e.g., "pippin market long"), `entry_price` must be `null`.
-5. **Take Profit (take_profit)**:
+6. **Take Profit (take_profit)**:
    - If multiple TPs (e.g., "150.0 \\n 155.6"), take ONLY the first number (e.g., "150.0").
    - If not mentioned, set to `null`.
-6. **Stop Loss (stop_loss)**:
+7. **Stop Loss (stop_loss)**:
    - If not mentioned, set to `null`.
-7. **Leverage (leverage)**:
+8. **Leverage (leverage)**:
    - (e.g., "20x" or "50x") extract number only (e.g., 20 or 50).
    - If not mentioned, set to `null`.
-8. **Only answer in JSON format**, no extra explanation.
+9. **Only answer in JSON format**, no extra explanation.
 
 【Examples】
 
@@ -89,6 +93,18 @@ JSON: {{"action": "NONE", "symbol": "PHAUSDT", "entry_price": null, "take_profit
 ---
 Message: "#BTC support long precise entry +2500 points, reduce position"
 JSON: {{"action": "NONE", "symbol": "BTCUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+Message: "#ARIA 多 浮盈"
+JSON: {{"action": "NONE", "symbol": "ARIAUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+Message: "#WOO 空單也跌得絲滑，利潤➕ 281.25%"
+JSON: {{"action": "NONE", "symbol": "WOOUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+Message: "#SOL 多單 +15% 已獲利出場"
+JSON: {{"action": "NONE", "symbol": "SOLUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
+---
+Message: "#ETH 空單順利到達TP，盈利50%"
+JSON: {{"action": "NONE", "symbol": "ETHUSDT", "entry_price": null, "take_profit": null, "stop_loss": null, "leverage": null}}
 ---
 
 【Task】
