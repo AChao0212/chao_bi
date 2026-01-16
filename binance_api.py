@@ -1009,17 +1009,29 @@ def set_leverage(symbol: str, suggested: Optional[int] = None) -> int:
     if binance_client is None:
         return 0
 
+    # Calculate max safe leverage based on risk parameters
+    # This ensures: max_distance (MAX_MARGIN_RISK_PCT / leverage) >= min_distance (MIN_STOP_DISTANCE_PCT)
+    # Rearranged: leverage <= MAX_MARGIN_RISK_PCT / MIN_STOP_DISTANCE_PCT
+    max_safe_leverage = int(MAX_MARGIN_RISK_PCT / MIN_STOP_DISTANCE_PCT)
+
     # Determine target leverage
-    if symbol in LEVERAGE_OVERRIDES:
-        target = int(LEVERAGE_OVERRIDES[symbol])
-    elif suggested and suggested > 0:
+    if suggested and suggested > 0:
+        # Use suggested leverage (from signal or auto-adjustment)
         target = int(suggested)
+    elif symbol in LEVERAGE_OVERRIDES:
+        target = int(LEVERAGE_OVERRIDES[symbol])
     else:
         target = int(DEFAULT_LEVERAGE)
 
-    # Cap to max allowed
+    # Cap to max allowed by exchange
     max_allowed = get_max_leverage(symbol)
     final_leverage = min(target, max_allowed)
+
+    # Cap to max safe leverage (prevents liquidation before SL hits)
+    if final_leverage > max_safe_leverage:
+        log.info(f"Capping leverage from {final_leverage}x to {max_safe_leverage}x "
+                 f"(ensures SL >= {MIN_STOP_DISTANCE_PCT*100:.1f}% with max {MAX_MARGIN_RISK_PCT*100:.0f}% margin loss)")
+        final_leverage = max_safe_leverage
 
     try:
         log.info(f"Setting {symbol} leverage: {final_leverage}x (max: {max_allowed})")

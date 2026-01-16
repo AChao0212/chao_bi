@@ -17,6 +17,7 @@ from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 from config import (
     MAX_INITIAL_MARGIN_PCT,
+    MAX_MARGIN_RISK_PCT,
     USE_PY_RISK_MANAGER,
     AUTO_CANCEL_SECONDS,
     ORDER_MONITOR_INTERVAL,
@@ -276,16 +277,7 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
     log.info(f"Entry: {entry_price or 'MARKET'}")
     log.info(f"SL: {sl}, TP: {tp}")
 
-    # Set leverage
-    leverage = binance_api.set_leverage(symbol, int(leverage_hint) if leverage_hint else None)
-    if leverage == 0:
-        log.error("Failed to set leverage")
-        notify_user(f"Trade rejected: Cannot set leverage for {symbol}", loop=event_loop)
-        return
-
-    log.info(f"Leverage: {leverage}x")
-
-    # Get reference price for calculations
+    # Get reference price for calculations (needed for leverage adjustment)
     if entry_price:
         ref_price = Decimal(str(entry_price))
     else:
@@ -296,6 +288,47 @@ def execute_trade(trade_params: dict, event_loop=None) -> None:
             return
         ref_price = Decimal(str(market_price))
         log.info(f"Using market price: {ref_price}")
+
+    # Calculate required leverage based on user-provided SL
+    # If user's SL is too wide for default leverage, reduce leverage to accommodate
+    suggested_leverage = int(leverage_hint) if leverage_hint else None
+    if sl is not None:
+        try:
+            sl_val = Decimal(str(sl))
+            sl_distance = abs(ref_price - sl_val) / ref_price
+
+            # Get max leverage allowed by exchange for this symbol
+            max_exchange_leverage = binance_api.get_max_leverage(symbol)
+
+            # Calculate max leverage that allows this SL distance within margin risk limit
+            # Formula: leverage <= MAX_MARGIN_RISK_PCT / sl_distance
+            if sl_distance > 0:
+                max_safe_leverage = int(MAX_MARGIN_RISK_PCT / sl_distance)
+
+                # Determine target leverage
+                if suggested_leverage:
+                    target_leverage = min(suggested_leverage, max_exchange_leverage)
+                else:
+                    target_leverage = max_exchange_leverage
+
+                # If target leverage is too high for the SL, reduce it
+                if target_leverage > max_safe_leverage:
+                    old_leverage = target_leverage
+                    # Round down to reasonable values: 5, 10, 15, 20, 25, etc.
+                    suggested_leverage = max(1, (max_safe_leverage // 5) * 5)
+                    log.info(f"Auto-reducing leverage: {old_leverage}x -> {suggested_leverage}x "
+                             f"(SL distance {sl_distance*100:.2f}% requires <= {max_safe_leverage}x)")
+        except Exception as e:
+            log.warning(f"Failed to calculate leverage adjustment: {e}")
+
+    # Set leverage (potentially auto-reduced)
+    leverage = binance_api.set_leverage(symbol, suggested_leverage)
+    if leverage == 0:
+        log.error("Failed to set leverage")
+        notify_user(f"Trade rejected: Cannot set leverage for {symbol}", loop=event_loop)
+        return
+
+    log.info(f"Leverage: {leverage}x")
 
     # Calculate SL/TP if using Python risk manager
     if USE_PY_RISK_MANAGER or sl is None or tp is None:

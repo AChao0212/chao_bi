@@ -83,11 +83,12 @@ RR_MAX = Decimal('3.0')        # 允許 LLM 給的 TP 與預設值距離差的�
 # 若設為 True，改用 Python 決策來計算 SL/TP（捨棄第二次 LLM 補齊）
 USE_PY_RISK_MANAGER = True
 # 最小止損距離（以入場價百分比）；避免 TP/SL 太貼近而「秒觸發」
-MIN_STOP_DISTANCE_PCT = Decimal('0.004')   # 0.4%
+# 設為 1.2% 以避免因正常波動而過早止損
+MIN_STOP_DISTANCE_PCT = Decimal('0.012')   # 1.2%
 # 最大保證金風險（SL觸發時損失保證金的百分比上限）
 # 此參數確保不同槓桿下的風險一致性
-# 例如：50% 表示 SL 觸發時最多損失 50% 保證金
-MAX_MARGIN_RISK_PCT = Decimal('0.50')  # 50%
+# 例如：60% 表示 SL 觸發時最多損失 60% 保證金
+MAX_MARGIN_RISK_PCT = Decimal('0.60')  # 60%
 # ATR 參數（以 5 分鐘 K 線計算）
 ATR_PERIOD = 14
 ATR_K = Decimal('1.5')  # 止損距離至少為 ATR * ATR_K
