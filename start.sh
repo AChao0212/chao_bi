@@ -98,16 +98,22 @@ create_systemd_service() {
     sudo bash -c "cat > '${SERVICE_FILE}' << EOF
 [Unit]
 Description=Chao Bi Telegram Trading Bot
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=${SCRIPT_DIR}
 ExecStart=${SCRIPT_DIR}/.venv/bin/python3 -u chao_bi.py
 Restart=on-failure
-RestartSec=10
+RestartSec=30
+TimeoutStopSec=30
 User=${USER}
 Environment=PYTHONUNBUFFERED=1
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

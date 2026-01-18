@@ -9,6 +9,8 @@ This module provides the main entry point for the trading bot:
 
 import re
 import asyncio
+import signal
+import sys
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 # =============================================================================
@@ -584,13 +586,69 @@ async def periodic_reconcile_task(loop: asyncio.AbstractEventLoop, interval_sec:
 # MAIN ENTRY POINT
 # =============================================================================
 
+# Global flag for graceful shutdown
+_shutdown_requested = False
+
+
+def _signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    global _shutdown_requested
+    sig_name = signal.Signals(signum).name
+    log.info(f"Received {sig_name}, initiating graceful shutdown...")
+    _shutdown_requested = True
+
+
+async def connect_telegram_with_retry(max_retries: int = 5, retry_delay: int = 10) -> bool:
+    """
+    Connect to Telegram with retry logic.
+
+    Args:
+        max_retries: Maximum number of connection attempts
+        retry_delay: Delay in seconds between retries
+
+    Returns:
+        True if connected successfully, False otherwise
+    """
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                log.info(f"Telegram connection attempt {attempt + 1}/{max_retries}...")
+
+            await client.start()
+            log.info("Telegram client connected")
+            return True
+
+        except Exception as e:
+            log.error(f"Telegram connection attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                log.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+            else:
+                log.error("All Telegram connection attempts failed")
+                return False
+
+    return False
+
+
 async def main() -> None:
     """Main entry point - start Telegram client and background tasks."""
+    global _shutdown_requested
+
     log.info("Starting Chao Bi trading bot...")
 
-    # Connect Telegram client
-    await client.start()
-    log.info("Telegram client connected")
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    # Connect Telegram client with retry
+    if not await connect_telegram_with_retry():
+        log.error("Failed to connect to Telegram, exiting...")
+        sys.exit(1)
+
+    # Verify Binance connection
+    if binance_api.binance_client is None:
+        log.error("Binance client not initialized, exiting...")
+        sys.exit(1)
 
     loop = asyncio.get_running_loop()
 
@@ -617,8 +675,54 @@ async def main() -> None:
     asyncio.create_task(binance_api.monitor_position_closes(poll_interval=60))
 
     log.info("Listening for messages...")
-    await client.run_until_disconnected()
+
+    # Main loop with reconnection support
+    while not _shutdown_requested:
+        try:
+            # Run until disconnected or shutdown requested
+            await client.run_until_disconnected()
+
+            if _shutdown_requested:
+                break
+
+            # If we get here, we got disconnected unexpectedly
+            log.warning("Telegram client disconnected, attempting to reconnect...")
+            await asyncio.sleep(5)
+
+            if await connect_telegram_with_retry():
+                log.info("Reconnected to Telegram")
+                # Re-register message handler after reconnection
+                try:
+                    from telethon import events
+                    client.add_event_handler(handle_message, events.NewMessage())
+                except Exception as e:
+                    log.error(f"Failed to re-register handler: {e}")
+            else:
+                log.error("Failed to reconnect to Telegram")
+                break
+
+        except asyncio.CancelledError:
+            log.info("Main loop cancelled")
+            break
+        except Exception as e:
+            log.error(f"Unexpected error in main loop: {e}")
+            if not _shutdown_requested:
+                await asyncio.sleep(10)
+
+    # Graceful shutdown
+    log.info("Shutting down...")
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
+    log.info("Chao Bi trading bot stopped")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log.info("Interrupted by user")
+    except Exception as e:
+        log.error(f"Fatal error: {e}")
+        sys.exit(1)

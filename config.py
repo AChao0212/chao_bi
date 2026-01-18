@@ -93,7 +93,7 @@ MAX_MARGIN_RISK_PCT = Decimal('0.60')  # 60%
 ATR_PERIOD = 14
 ATR_K = Decimal('1.5')  # 止損距離至少為 ATR * ATR_K
 # 12 小時未成交自動撤單（秒）
-AUTO_CANCEL_SECONDS = 12 * 60 * 60
+AUTO_CANCEL_SECONDS = 8 * 60 * 60
 # 監控輪詢間隔（秒）
 ORDER_MONITOR_INTERVAL = 30
 # Reconcile 診斷輸出（True=詳細列印每個 symbol 的錯誤；False=靜默）

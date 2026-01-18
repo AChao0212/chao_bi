@@ -153,56 +153,72 @@ def _notify_user(text: str, loop=None) -> None:
 # 3. CLIENT INITIALIZATION
 # =============================================================================
 
-def _initialize_client() -> Optional[DerivativesTradingUsdsFutures]:
+def _initialize_client(max_retries: int = 5, retry_delay: int = 10) -> Optional[DerivativesTradingUsdsFutures]:
     """
-    Initialize the Binance USDS-M Futures client.
+    Initialize the Binance USDS-M Futures client with retry logic.
+
+    Args:
+        max_retries: Maximum number of connection attempts
+        retry_delay: Delay in seconds between retries
 
     Returns:
         Configured client instance or None if initialization fails
     """
     global total_available_margin
 
-    try:
-        # Configure REST API client
-        config = ConfigurationRestAPI(
-            api_key=BINANCE_API_KEY,
-            api_secret=BINANCE_API_SECRET,
-            base_path=REAL_FUTURES_BASE_URL or DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL,
-            timeout=5000,  # 5 seconds timeout (default was 1s which caused timeouts)
-        )
-        client = DerivativesTradingUsdsFutures(config_rest_api=config)
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                log.info(f"Binance connection attempt {attempt + 1}/{max_retries}...")
 
-        # Ensure hedge mode is enabled
-        _ensure_hedge_mode(client)
+            # Configure REST API client
+            config = ConfigurationRestAPI(
+                api_key=BINANCE_API_KEY,
+                api_secret=BINANCE_API_SECRET,
+                base_path=REAL_FUTURES_BASE_URL or DERIVATIVES_TRADING_USDS_FUTURES_REST_API_PROD_URL,
+                timeout=5000,  # 5 seconds timeout (default was 1s which caused timeouts)
+            )
+            client = DerivativesTradingUsdsFutures(config_rest_api=config)
 
-        # Get account balance
-        resp = client.rest_api.account_information_v3()
-        raw_data = resp.data()
+            # Ensure hedge mode is enabled
+            _ensure_hedge_mode(client)
 
-        # Try to access available_balance directly as attribute (new SDK uses snake_case)
-        if hasattr(raw_data, "available_balance"):
-            total_available_margin = float(raw_data.available_balance or 0)
-        elif hasattr(raw_data, "availableBalance"):
-            total_available_margin = float(raw_data.availableBalance or 0)
-        else:
-            account_info = _to_dict(raw_data)
-            total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
+            # Get account balance
+            resp = client.rest_api.account_information_v3()
+            raw_data = resp.data()
 
-        if total_available_margin <= 0:
-            log.error("Total available margin is 0")
+            # Try to access available_balance directly as attribute (new SDK uses snake_case)
+            if hasattr(raw_data, "available_balance"):
+                total_available_margin = float(raw_data.available_balance or 0)
+            elif hasattr(raw_data, "availableBalance"):
+                total_available_margin = float(raw_data.availableBalance or 0)
+            else:
+                account_info = _to_dict(raw_data)
+                total_available_margin = float(account_info.get("availableBalance") or account_info.get("available_balance") or 0)
+
+            if total_available_margin <= 0:
+                log.error("Total available margin is 0")
+                return None
+
+            log.info("Binance connection successful")
+            log.info(f"Available balance: {total_available_margin} USDT")
+
+            return client
+
+        except ClientError as e:
+            log.error(f"API authentication failed: {e}")
+            # Don't retry on authentication errors
             return None
+        except Exception as e:
+            log.error(f"Connection attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                log.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                log.error("All connection attempts failed")
+                return None
 
-        log.info("Binance connection successful")
-        log.info(f"Available balance: {total_available_margin} USDT")
-
-        return client
-
-    except ClientError as e:
-        log.error(f"API authentication failed: {e}")
-        return None
-    except Exception as e:
-        log.error(f"Connection failed: {e}")
-        return None
+    return None
 
 
 def _ensure_hedge_mode(client: DerivativesTradingUsdsFutures) -> None:
